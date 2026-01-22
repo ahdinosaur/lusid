@@ -106,8 +106,10 @@ where
 
             line = stderr_lines.next_line(), if !stderr_done => {
                 match line {
-                    Ok(Some(_line)) => {
-                        // TODO
+                    Ok(Some(line)) => {
+                        if !line.trim().is_empty() {
+                            app.push_stderr(line)
+                        }
                     },
                     Ok(None) => stderr_done = true,
                     Err(err) => return Err(err.into()),
@@ -334,6 +336,7 @@ struct TuiApp {
     operations_apply_state: OperationsApplyState,
 
     child_exited: bool,
+    stderr: Vec<String>,
 }
 
 impl TuiApp {
@@ -351,6 +354,7 @@ impl TuiApp {
 
             operations_apply_state: OperationsApplyState::default(),
             child_exited: false,
+            stderr: Vec::new(),
         }
     }
 
@@ -526,6 +530,14 @@ impl TuiApp {
                 .map(|tree| (tree, &mut self.operations_state)),
             PipelineStage::OperationsEpochs => None,
         }
+    }
+
+    fn push_stderr(&mut self, line: String) {
+        self.stderr.push(line);
+    }
+
+    fn stderr_text(&self) -> String {
+        self.stderr.join("\n")
     }
 }
 
