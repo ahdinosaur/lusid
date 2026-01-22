@@ -97,12 +97,26 @@ pub enum FsError {
         source: nix::Error,
     },
 
+    #[error("Failed to get user from uid: {uid}")]
+    UserFromUid {
+        uid: u32,
+        #[source]
+        source: nix::Error,
+    },
+
     #[error("User not found: {user}")]
     UserNotFound { user: String },
 
     #[error("Failed to get group from name: {group}")]
     GroupFromName {
         group: String,
+        #[source]
+        source: nix::Error,
+    },
+
+    #[error("Failed to get group from gid: {gid}")]
+    GroupFromGid {
+        gid: u32,
         #[source]
         source: nix::Error,
     },
@@ -279,6 +293,15 @@ pub async fn setup_directory_access<P: AsRef<Path>>(path: P) -> Result<(), FsErr
     Ok(())
 }
 
+pub async fn get_mode<P: AsRef<Path>>(path: P) -> Result<u32, FsError> {
+    let p = path.as_ref();
+    let metadata = fs::metadata(p).await.map_err(|source| FsError::Metadata {
+        path: p.to_path_buf(),
+        source,
+    })?;
+    Ok(metadata.permissions().mode())
+}
+
 pub async fn change_mode<P: AsRef<Path>>(path: P, mode: u32) -> Result<(), FsError> {
     let p = path.as_ref();
     let mut permissions = fs::metadata(p)
@@ -357,6 +380,26 @@ pub async fn change_owner<P: AsRef<Path>>(
     };
 
     change_owner_by_id(path, uid, gid).await
+}
+
+pub async fn get_owner_user<P: AsRef<Path>>(path: P) -> Result<Option<User>, FsError> {
+    let p = path.as_ref();
+    let metadata = fs::metadata(p).await.map_err(|source| FsError::Metadata {
+        path: p.to_path_buf(),
+        source,
+    })?;
+    let uid = metadata.uid();
+    User::from_uid(uid.into()).map_err(|source| FsError::UserFromUid { uid, source })
+}
+
+pub async fn get_owner_group<P: AsRef<Path>>(path: P) -> Result<Option<Group>, FsError> {
+    let p = path.as_ref();
+    let metadata = fs::metadata(p).await.map_err(|source| FsError::Metadata {
+        path: p.to_path_buf(),
+        source,
+    })?;
+    let gid = metadata.gid();
+    Group::from_gid(gid.into()).map_err(|source| FsError::GroupFromGid { gid, source })
 }
 
 pub async fn create_file<P: AsRef<Path>>(path: P) -> Result<tokio::fs::File, FsError> {

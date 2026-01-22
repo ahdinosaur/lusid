@@ -1,10 +1,14 @@
-use std::fmt::{self, Display};
+use std::{
+    fmt::{self, Display},
+    path::PathBuf,
+};
 
 use async_trait::async_trait;
 use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
+use lusid_fs::{self as fs, FsError};
 use lusid_operation::{
     operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileUser},
     Operation,
@@ -106,6 +110,7 @@ impl Display for FileResource {
 #[derive(Debug, Clone)]
 pub enum FileState {
     FileSourced,
+    FileNotSourced,
     FilePresent,
     FileAbsent,
     DirectoryPresent,
@@ -123,6 +128,7 @@ impl Display for FileState {
         use FileState::*;
         let text = match self {
             FileSourced => "FileSourced",
+            FileNotSourced => "FileNotSourced",
             FilePresent => "FilePresent",
             FileAbsent => "FileAbsent",
             DirectoryPresent => "DirectoryPresent",
@@ -142,10 +148,7 @@ impl Display for FileState {
 #[derive(Error, Debug)]
 pub enum FileStateError {
     #[error(transparent)]
-    Command(#[from] CommandError),
-
-    #[error("failed to parse status: {status}")]
-    ParseStatus { status: String },
+    Fs(#[from] FsError),
 }
 
 #[derive(Debug, Clone)]
@@ -219,16 +222,6 @@ impl ResourceType for File {
 
     type Params = FileParams;
     type Resource = FileResource;
-    /*
-    FileSource { source: FilePath, path: FilePath },
-    FilePresent { path: FilePath },
-    FileAbsent { path: FilePath },
-    DirectoryPresent { path: FilePath },
-    DirectoryAbsent { path: FilePath },
-    Mode { path: FilePath, mode: FileMode },
-    User { path: FilePath, user: FileGroup },
-    Group { path: FilePath, group: FileGroup },
-    */
 
     fn resources(params: Self::Params) -> Vec<CausalityTree<Self::Resource>> {
         match params {
@@ -343,17 +336,104 @@ impl ResourceType for File {
         }
     }
 
+    /*
+    pub enum FileResource {
+        FileSource { source: FilePath, path: FilePath },
+        FilePresent { path: FilePath },
+        FileAbsent { path: FilePath },
+        DirectoryPresent { path: FilePath },
+        DirectoryAbsent { path: FilePath },
+        Mode { path: FilePath, mode: FileMode },
+        User { path: FilePath, user: FileUser },
+        Group { path: FilePath, group: FileGroup },
+    }
+
+    pub enum FileState {
+        FileSourced,
+        FileNotSourced,
+        FilePresent,
+        FileAbsent,
+        DirectoryPresent,
+        DirectoryAbsent,
+        ModeCorrect,
+        ModeIncorrect,
+        UserCorrect,
+        UserIncorrect,
+        GroupCorrect,
+        GroupIncorrect,
+        */
+
     type State = FileState;
     type StateError = FileStateError;
     async fn state(
         ctx: &mut Context,
         resource: &Self::Resource,
     ) -> Result<Self::State, Self::StateError> {
-        match resource {}
+        let state = match resource {
+            FileResource::FileSource { source, path } => {
+                let source_contents = fs::read_file_to_string(source.as_path()).await?;
+                let path_contents = fs::read_file_to_string(path.as_path()).await?;
+                if source_contents == path_contents {
+                    FileState::FileSourced
+                } else {
+                    FileState::FileNotSourced
+                }
+            }
+            FileResource::FilePresent { path } | FileResource::FileAbsent { path } => {
+                if fs::path_exists(path.as_path()).await? {
+                    FileState::FilePresent
+                } else {
+                    FileState::FileAbsent
+                }
+            }
+            FileResource::DirectoryPresent { path } | FileResource::DirectoryAbsent { path } => {
+                if fs::path_exists(path.as_path()).await? {
+                    FileState::DirectoryPresent
+                } else {
+                    FileState::DirectoryAbsent
+                }
+            }
+            FileResource::Mode { path, mode } => {
+                let actual_mode = fs::get_mode(path.as_path()).await?;
+                if actual_mode == mode.as_u32() {
+                    FileState::ModeCorrect
+                } else {
+                    FileState::ModeIncorrect
+                }
+            }
+            FileResource::User { path, user } => {
+                let actual_user = fs::get_owner_user(path.as_path()).await?;
+                if actual_user.map(|u| u.name) == Some(user.to_string()) {
+                    FileState::UserCorrect
+                } else {
+                    FileState::UserIncorrect
+                }
+            }
+            FileResource::Group { path, group } => {
+                let actual_group = fs::get_owner_group(path.as_path()).await?;
+                if actual_group.map(|u| u.name) == Some(group.to_string()) {
+                    FileState::GroupCorrect
+                } else {
+                    FileState::GroupIncorrect
+                }
+            }
+        };
+        Ok(state)
     }
 
     type Change = FileChange;
-    fn change(resource: &Self::Resource, state: &Self::State) -> Option<Self::Change> {}
+    fn change(resource: &Self::Resource, state: &Self::State) -> Option<Self::Change> {
+        match (resource, state) {
+            (FileResource::FileSource { source, path }) => {}
+            (FileResource::FilePresent { path }) => {}
+            (FileResource::FileAbsent { path }) => {}
+            (FileResource::DirectoryPresent { path }) => {}
+            (FileResource::DirectoryAbsent { path }) => {}
+            (FileResource::Mode { path, mode }) => {}
+            (FileResource::User { path, user }) => {}
+            (FileResource::Group { path, group }) => {}
+        }
+    }
 
     fn operations(change: Self::Change) -> Vec<CausalityTree<Operation>> {}
 }

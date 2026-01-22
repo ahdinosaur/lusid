@@ -7,6 +7,7 @@ edition = "2024"
 lusid-causality = { path = "../causality", version = "0.1" }
 lusid-cmd = { path = "../cmd", version = "0.1" }
 lusid-ctx = { path = "../ctx", version = "0.1" }
+lusid-fs = { path = "../fs", version = "0.1" }
 lusid-params = { path = "../params", version = "0.1" }
 lusid-operation = { path = "../operation", version = "0.1" }
 lusid-view = { path = "../view", version = "0.1" }

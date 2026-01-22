@@ -2240,6 +2240,7 @@ dependencies = [
  "lusid-causality",
  "lusid-cmd",
  "lusid-ctx",
+ "lusid-fs",
  "lusid-operation",
  "lusid-params",
  "lusid-view",
