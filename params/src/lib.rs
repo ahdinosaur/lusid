@@ -47,14 +47,14 @@ impl ParamField {
     }
 }
 
-pub type ParamStruct = IndexMap<String, Spanned<ParamField>>;
+pub type ParamsStruct = IndexMap<String, Spanned<ParamField>>;
 
 #[derive(Debug, Clone)]
 pub enum ParamTypes {
     // A single object structure: keys -> fields
-    Struct(ParamStruct),
+    Struct(ParamsStruct),
     // A union of possible object structures.
-    Union(Vec<ParamStruct>),
+    Union(Vec<ParamsStruct>),
 }
 
 #[derive(Debug, Clone)]
@@ -135,7 +135,10 @@ impl ParamValue {
                 ParamValue::Object(object)
             }
             (ParamType::HostPath, Value::String(value)) => {
-                ParamValue::HostPath(PathBuf::from(value))
+                let source_path = PathBuf::from(span.source().as_str());
+                let value_path = PathBuf::from(value);
+                let host_path = source_path.join(value_path);
+                ParamValue::HostPath(host_path)
             }
             (ParamType::TargetPath, Value::String(value)) => ParamValue::TargetPath(value),
             _ => {
@@ -184,7 +187,7 @@ impl ParamValues {
 
     pub fn from_rimu_spanned(
         value: Spanned<Value>,
-        type_struct: ParamStruct,
+        type_struct: ParamsStruct,
     ) -> Result<Spanned<Self>, Spanned<ParamValuesFromRimuError>> {
         let (value, span) = value.take();
 
@@ -210,6 +213,11 @@ impl ParamValues {
 }
 
 impl ParamValues {
+    pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
+        let (value, span) = value.take();
+        Spanned::new(value.into_rimu(), span)
+    }
+
     pub fn into_rimu(self) -> Value {
         let object = self
             .0
@@ -629,7 +637,7 @@ fn validate_struct(
 pub fn validate(
     param_types: Option<&Spanned<ParamTypes>>,
     param_values: Option<&Spanned<Value>>,
-) -> Result<Option<ParamStruct>, ParamsValidationError> {
+) -> Result<Option<ParamsStruct>, ParamsValidationError> {
     let (param_types, param_values) = match (param_types, param_values) {
         (Some(param_types), Some(param_values)) => (param_types, param_values),
         (Some(_), None) => {

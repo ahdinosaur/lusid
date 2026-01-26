@@ -78,7 +78,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         Some(json) => {
             let value: serde_json::Value =
                 serde_json::from_str(&json).map_err(ApplyError::JsonParameters)?;
-            let source_id = SourceId::from("<cli:params>".to_string());
+            let source_id = SourceId::empty();
             let params = ParamValues::from_type(value, source_id)?;
             Some(params)
         }

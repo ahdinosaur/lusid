@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use displaydoc::Display;
-use lusid_params::{ParamTypes, ParamTypesFromRimuError, ParamValues, ParamValuesFromRimuError};
+use lusid_params::{ParamTypes, ParamTypesFromRimuError};
 use rimu::{Function, Span, Spanned, Value};
 use rimu_interop::FromRimu;
 use thiserror::Error;
@@ -53,7 +53,7 @@ impl FromRimu for Version {
 pub struct PlanItem {
     pub id: Option<Spanned<String>>,
     pub module: Spanned<String>,
-    pub params: Option<Spanned<ParamValues>>,
+    pub params: Option<Spanned<Value>>,
     pub before: Vec<Spanned<String>>,
     pub after: Vec<Spanned<String>>,
 }
@@ -68,8 +68,6 @@ pub enum IntoPlanItemError {
     ModuleNotAString { span: Span },
     /// Property "id" must be a string
     IdNotAString { span: Span },
-    /// Failed to convert "params" into ParamValues: {0:?}
-    Params(Spanned<ParamValuesFromRimuError>),
     /// Property "before" must be a list
     BeforeNotAList { span: Span },
     /// "before" list item must be a string
@@ -112,10 +110,7 @@ impl FromRimu for PlanItem {
             })
             .transpose()?;
 
-        let params = object
-            .swap_remove("params")
-            .map(|sp| ParamValues::from_rimu_spanned(sp).map_err(IntoPlanItemError::Params))
-            .transpose()?;
+        let params = object.swap_remove("params");
 
         let before = match object.swap_remove("before") {
             None => Vec::new(),
