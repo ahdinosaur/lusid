@@ -70,6 +70,35 @@ pub enum ParamValue {
 }
 
 impl ParamValue {
+    pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
+        let (value, span) = value.take();
+        Spanned::new(value.into_rimu(), span)
+    }
+
+    pub fn into_rimu(self) -> Value {
+        match self {
+            ParamValue::Literal(value) => value,
+            ParamValue::Boolean(value) => Value::Boolean(value),
+            ParamValue::String(value) => Value::String(value),
+            ParamValue::Number(number) => Value::Number(number),
+            ParamValue::List(items) => {
+                let items = items.into_iter().map(Self::into_rimu_spanned).collect();
+                Value::List(items)
+            }
+            ParamValue::Object(map) => {
+                let map = map
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::into_rimu_spanned(value)))
+                    .collect();
+                Value::Object(map)
+            }
+            ParamValue::HostPath(path) => {
+                Value::String(format!("lusid://{}", path.to_string_lossy().into_owned()))
+            }
+            ParamValue::TargetPath(path) => Value::String(path),
+        }
+    }
+
     fn from_rimu_spanned(
         value: Spanned<Value>,
         typ: ParamType,
@@ -89,20 +118,20 @@ impl ParamValue {
             (ParamType::List { item: item_type }, Value::List(items)) => {
                 let items = items
                     .into_iter()
-                    .map(|item| ParamValue::from_rimu_spanned(item, item_type.into_inner()))
-                    .collect()?;
+                    .map(|item| ParamValue::from_rimu_spanned(item, item_type.inner().clone()))
+                    .collect::<Result<_, _>>()?;
                 ParamValue::List(items)
             }
             (ParamType::Object { value: value_type }, Value::Object(object)) => {
                 let object = object
                     .into_iter()
                     .map(|(key, value)| {
-                        (
+                        Ok::<_, Spanned<ParamValuesFromRimuError>>((
                             key,
-                            ParamValue::from_rimu_spanned(value, value_type.into_inner()),
-                        )
+                            ParamValue::from_rimu_spanned(value, value_type.inner().clone())?,
+                        ))
                     })
-                    .collect()?;
+                    .collect::<Result<_, _>>()?;
                 ParamValue::Object(object)
             }
             (ParamType::HostPath, Value::String(value)) => {
@@ -182,7 +211,12 @@ impl ParamValues {
 
 impl ParamValues {
     pub fn into_rimu(self) -> Value {
-        Value::Object(self.0)
+        let object = self
+            .0
+            .into_iter()
+            .map(|(key, value)| (key, ParamValue::into_rimu_spanned(value)))
+            .collect();
+        Value::Object(object)
     }
 
     pub fn get(&self, key: &str) -> Option<&Spanned<ParamValue>> {
@@ -193,7 +227,7 @@ impl ParamValues {
     where
         T: DeserializeOwned,
     {
-        let value = Value::Object(self.0);
+        let value = self.into_rimu();
         let serde_value = SerdeValue::from(value);
         from_serde_value(serde_value)
     }
