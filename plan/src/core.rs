@@ -1,5 +1,5 @@
 use lusid_params::{validate, ParamValues};
-use lusid_resource::{apt::Apt, ResourceParams, ResourceType};
+use lusid_resource::{apt::Apt, file::File, ResourceParams, ResourceType};
 use rimu::{Spanned, Value};
 
 use crate::PlanItemToResourceError;
@@ -14,6 +14,7 @@ pub fn core_module(
 ) -> Result<ResourceParams, PlanItemToResourceError> {
     match core_module_id {
         Apt::ID => core_module_for_resource::<Apt>(params).map(ResourceParams::Apt),
+        File::ID => core_module_for_resource::<File>(params).map(ResourceParams::File),
         other => Err(PlanItemToResourceError::UnsupportedCoreModuleId {
             id: other.to_string(),
         }),
@@ -27,7 +28,7 @@ fn core_module_for_resource<R: ResourceType>(
     let param_types = R::param_types();
 
     let params_struct = validate(param_types.as_ref(), Some(&params_value))?;
-    let params_struct = params_struct.expect("params struct should exist if params value exists");
+    let params_struct = params_struct.expect("params struc should exist for core module");
 
     let param_values = ParamValues::from_rimu_spanned(params_value, params_struct)
         .map_err(PlanItemToResourceError::ParamsValueFromRimu)?;

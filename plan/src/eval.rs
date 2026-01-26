@@ -8,13 +8,13 @@ use crate::model::{IntoPlanItemError, PlanItem, SetupFunction};
 
 #[derive(Debug, Error, Display)]
 pub enum EvalError {
-    /// Converting params from rimu value failed
+    /// Converting params from rimu value failed: {0}
     Params(Box<Spanned<ParamValuesFromRimuError>>),
-    /// Calling setup function failed
+    /// Calling setup function failed: {0}
     RimuCall(#[from] Box<rimu::EvalError>),
     /// Setup returned a non-list value
     ReturnedNotList,
-    /// Invalid PlanItem value
+    /// Invalid PlanItem value: {0}
     InvalidPlanItem(Box<Spanned<IntoPlanItemError>>),
 }
 

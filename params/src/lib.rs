@@ -38,6 +38,13 @@ impl ParamField {
         }
     }
 
+    pub fn with_optional(self) -> Self {
+        Self {
+            typ: self.typ,
+            optional: true,
+        }
+    }
+
     pub fn typ(&self) -> &ParamType {
         &self.typ
     }
@@ -464,9 +471,9 @@ pub enum ParamsValidationError {
     TypesWithoutValues,
     /// Expected an object for parameter values
     ValuesNotAnObject,
-    /// Parameter struct did not match all fields
+    /// Parameter struct did not match all fields: {0}
     Struct(#[from] Box<ParamsStructValidationError>),
-    /// Parameter union did not match any case
+    /// Parameter union did not match any case: {case_errors:?}
     Union {
         case_errors: Vec<ParamsStructValidationError>,
     },

@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use crate::resources::file::FileParams;
 pub use crate::resources::*;
 
 use async_trait::async_trait;
@@ -16,6 +17,7 @@ mod resources;
 
 use crate::resources::apt::AptParams;
 use crate::resources::apt::{Apt, AptChange, AptResource, AptState};
+use crate::resources::file::{File, FileChange, FileResource, FileState};
 
 /// ResourceType:
 /// - ParamTypes for Rimu schema
@@ -64,13 +66,15 @@ pub trait ResourceType {
 #[derive(Debug, Clone)]
 pub enum ResourceParams {
     Apt(AptParams),
+    File(FileParams),
 }
 
 impl Display for ResourceParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use ResourceParams::*;
         match self {
-            Apt(apt) => apt.fmt(f),
+            Apt(params) => params.fmt(f),
+            File(params) => params.fmt(f),
         }
     }
 }
@@ -78,6 +82,7 @@ impl Display for ResourceParams {
 #[derive(Debug, Clone)]
 pub enum Resource {
     Apt(AptResource),
+    File(FileResource),
 }
 
 impl Display for Resource {
@@ -85,6 +90,7 @@ impl Display for Resource {
         use Resource::*;
         match self {
             Apt(apt) => apt.fmt(f),
+            File(file) => file.fmt(f),
         }
     }
 }
@@ -92,6 +98,7 @@ impl Display for Resource {
 #[derive(Debug, Clone)]
 pub enum ResourceState {
     Apt(AptState),
+    File(FileState),
 }
 
 impl Display for ResourceState {
@@ -99,6 +106,7 @@ impl Display for ResourceState {
         use ResourceState::*;
         match self {
             Apt(apt) => apt.fmt(f),
+            File(file) => file.fmt(f),
         }
     }
 }
@@ -107,11 +115,14 @@ impl Display for ResourceState {
 pub enum ResourceStateError {
     #[error("apt state error: {0}")]
     Apt(#[from] <Apt as ResourceType>::StateError),
+    #[error("file state error: {0}")]
+    File(#[from] <File as ResourceType>::StateError),
 }
 
 #[derive(Debug, Clone)]
 pub enum ResourceChange {
     Apt(AptChange),
+    File(FileChange),
 }
 
 impl Display for ResourceChange {
@@ -119,6 +130,7 @@ impl Display for ResourceChange {
         use ResourceChange::*;
         match self {
             Apt(apt) => apt.fmt(f),
+            File(file) => file.fmt(f),
         }
     }
 }
@@ -137,6 +149,7 @@ impl ResourceParams {
 
         match self {
             ResourceParams::Apt(params) => typed::<Apt>(params, Resource::Apt),
+            ResourceParams::File(params) => typed::<File>(params, Resource::File),
         }
     }
 }
@@ -156,6 +169,9 @@ impl Resource {
             Resource::Apt(resource) => {
                 typed::<Apt>(ctx, resource, ResourceState::Apt, ResourceStateError::Apt).await
             }
+            Resource::File(resource) => {
+                typed::<File>(ctx, resource, ResourceState::File, ResourceStateError::File).await
+            }
         }
     }
 
@@ -174,6 +190,9 @@ impl Resource {
             (Resource::Apt(resource), ResourceState::Apt(state)) => {
                 typed::<Apt>(resource, state, ResourceChange::Apt)
             }
+            (Resource::File(resource), ResourceState::File(state)) => {
+                typed::<File>(resource, state, ResourceChange::File)
+            }
             _ => {
                 // Programmer error, should never happen, or if it does should be immediately obvious.
                 panic!("Unmatched resource and state")
@@ -186,6 +205,7 @@ impl ResourceChange {
     pub fn operations(self) -> Vec<CausalityTree<Operation>> {
         match self {
             ResourceChange::Apt(change) => Apt::operations(change),
+            ResourceChange::File(change) => File::operations(change),
         }
     }
 }

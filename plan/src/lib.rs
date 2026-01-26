@@ -24,26 +24,26 @@ use crate::{
 
 #[derive(Debug, Error, Display)]
 pub enum PlanError {
-    /// Failed to read plan source from store for id {id:?}
+    /// Failed to read plan source from store for id {id:?}: {source}
     StoreRead {
         id: StoreItemId,
         #[source]
         source: StoreError,
     },
 
-    /// Failed to decode plan source as UTF-8
+    /// Failed to decode plan source as UTF-8: {0}
     InvalidUtf8(#[from] FromUtf8Error),
 
-    /// Failed to load plan source
+    /// Failed to load plan source: {0}
     Load(#[from] LoadError),
 
-    /// Parameter validation failed
+    /// Parameter validation failed: {0}
     Validate(#[from] ParamsValidationError),
 
-    /// Failed to evaluate plan setup
+    /// Failed to evaluate plan setup: {0}
     Eval(#[from] EvalError),
 
-    /// Failed to convert plan item to resource
+    /// Failed to convert plan item to resource: {0}
     PlanItemToResource(#[from] PlanItemToResourceError),
 }
 
@@ -106,19 +106,19 @@ pub enum PlanItemToResourceError {
     /// Missing required parameters in plan item
     MissingParams,
 
-    /// Parameters validation for resource failed
+    /// Parameters validation for resource failed: {0}
     ParamsValidation(#[from] ParamsValidationError),
 
-    /// Parameters value from rimu value for resource failed
+    /// Parameters value from rimu value for resource failed: {0}
     ParamsValueFromRimu(Spanned<ParamValuesFromRimuError>),
 
-    /// Failed to convert parameter values to resource params
+    /// Failed to convert parameter values to resource params: {0}
     SerdeValue(#[from] rimu::SerdeValueError),
 
     /// Unsupported core module id \"{id}\"
     UnsupportedCoreModuleId { id: String },
 
-    /// Failed to compute subtree for nested plan
+    /// Failed to compute subtree for nested plan: {0}
     PlanSubtree(#[from] Box<PlanError>),
 }
 

@@ -1,7 +1,4 @@
-use std::{
-    fmt::{self, Display},
-    path::Path,
-};
+use std::fmt::{self, Display};
 
 use async_trait::async_trait;
 use indexmap::indexmap;
@@ -204,39 +201,45 @@ impl ResourceType for File {
 
     fn param_types() -> Option<Spanned<ParamTypes>> {
         let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |ty| Spanned::new(ParamField::new(ty), span.clone());
+        let field = |ty, required: bool| {
+            let mut param = ParamField::new(ty);
+            if !required {
+                param = param.with_optional();
+            }
+            Spanned::new(param, span.clone())
+        };
 
         Some(Spanned::new(
             ParamTypes::Union(vec![
                 indexmap! {
-                  "type".to_string() => field(ParamType::Literal("source".into())),
-                  "source".to_string() => field(ParamType::String),
-                  "path".to_string() => field(ParamType::String),
-                  "mode".to_string() => field(ParamType::Number),
-                  "user".to_string() => field(ParamType::String),
-                  "group".to_string() => field(ParamType::String),
+                  "type".to_string() => field(ParamType::Literal("source".into()), true),
+                  "source".to_string() => field(ParamType::HostPath, true),
+                  "path".to_string() => field(ParamType::TargetPath, true),
+                  "mode".to_string() => field(ParamType::Number, false),
+                  "user".to_string() => field(ParamType::String, false),
+                  "group".to_string() => field(ParamType::String, false),
                 },
                 indexmap! {
-                  "type".to_string() => field(ParamType::Literal("file".into())),
-                  "path".to_string() => field(ParamType::String),
-                  "mode".to_string() => field(ParamType::Number),
-                  "user".to_string() => field(ParamType::String),
-                  "group".to_string() => field(ParamType::String),
+                  "type".to_string() => field(ParamType::Literal("file".into()), true),
+                  "path".to_string() => field(ParamType::TargetPath, true),
+                  "mode".to_string() => field(ParamType::Number, false),
+                  "user".to_string() => field(ParamType::String, false),
+                  "group".to_string() => field(ParamType::String, false),
                 },
                 indexmap! {
-                  "type".to_string() => field(ParamType::Literal("file-absent".into())),
-                  "path".to_string() => field(ParamType::String),
+                  "type".to_string() => field(ParamType::Literal("file-absent".into()), true),
+                  "path".to_string() => field(ParamType::TargetPath, true),
                 },
                 indexmap! {
-                  "type".to_string() => field(ParamType::Literal("directory".into())),
-                  "path".to_string() => field(ParamType::String),
-                  "mode".to_string() => field(ParamType::Number),
-                  "user".to_string() => field(ParamType::String),
-                  "group".to_string() => field(ParamType::String),
+                  "type".to_string() => field(ParamType::Literal("directory".into()), true),
+                  "path".to_string() => field(ParamType::TargetPath, true),
+                  "mode".to_string() => field(ParamType::Number, false),
+                  "user".to_string() => field(ParamType::String, false),
+                  "group".to_string() => field(ParamType::String, false),
                 },
                 indexmap! {
-                  "type".to_string() => field(ParamType::Literal("directory-absent".into())),
-                  "path".to_string() => field(ParamType::String),
+                  "type".to_string() => field(ParamType::Literal("directory-absent".into()), true),
+                  "path".to_string() => field(ParamType::TargetPath, true),
                 },
             ]),
             span,
