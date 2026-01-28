@@ -402,8 +402,8 @@ impl ResourceType for File {
                 if !fs::path_exists(path.as_path()).await? {
                     FileState::FileNotSourced
                 } else {
-                    let source_contents = fs::read_file_to_string(source.as_path()).await?;
-                    let path_contents = fs::read_file_to_string(path.as_path()).await?;
+                    let source_contents = fs::read_file_to_bytes(source.as_path()).await?;
+                    let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
                     if source_contents == path_contents {
                         FileState::FileSourced
                     } else {

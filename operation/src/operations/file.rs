@@ -118,8 +118,8 @@ pub enum FileOperation {
         path: FilePath,
     },
     CreateSymlink {
+        source: FilePath,
         path: FilePath,
-        target: FilePath,
     },
     ChangeMode {
         path: FilePath,
@@ -171,10 +171,10 @@ impl Display for FileOperation {
             FileOperation::RemoveDirectory { path } => {
                 write!(f, "File::RemoveDirectory(path = {})", path)
             }
-            FileOperation::CreateSymlink { path, target } => write!(
+            FileOperation::CreateSymlink { source, path } => write!(
                 f,
-                "File::CreateSymlink(path = {}, target = {})",
-                path, target
+                "File::CreateSymlink(source = {}, path = {})",
+                source, path
             ),
             FileOperation::ChangeMode { path, mode } => {
                 write!(f, "File::ChangeMode(path = {}, mode = {})", path, mode)
@@ -239,7 +239,7 @@ impl OperationType for File {
                 info!("[file] copy file: {} -> {}", source, destination);
                 Ok((
                     Box::pin(async move {
-                        fs::copy_file_atomic(destination.as_path(), source.as_path()).await
+                        fs::copy_file_atomic(source.as_path(), destination.as_path()).await
                     }),
                     stdout,
                     stderr,
@@ -282,11 +282,11 @@ impl OperationType for File {
                     stderr,
                 ))
             }
-            FileOperation::CreateSymlink { path, target } => {
-                info!("[file] create symlink: {} -> {}", path, target);
+            FileOperation::CreateSymlink { source, path } => {
+                info!("[file] create symlink: {} -> {}", path, source);
                 Ok((
                     Box::pin(
-                        async move { fs::create_symlink(path.as_path(), target.as_path()).await },
+                        async move { fs::create_symlink(source.as_path(), path.as_path()).await },
                     ),
                     stdout,
                     stderr,
@@ -310,7 +310,7 @@ impl OperationType for File {
                         fs::change_owner(
                             path.as_path(),
                             user.as_ref().map(|u| u.as_str()),
-                            user.as_ref().map(|g| g.as_str()),
+                            group.as_ref().map(|g| g.as_str()),
                         )
                         .await
                     }),

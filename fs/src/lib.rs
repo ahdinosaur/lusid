@@ -516,6 +516,14 @@ pub async fn read_file_to_string<P: AsRef<Path>>(path: P) -> Result<String, FsEr
         })
 }
 
+pub async fn read_file_to_bytes<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, FsError> {
+    let p = path.as_ref();
+    fs::read(p).await.map_err(|source| FsError::ReadFile {
+        path: p.to_path_buf(),
+        source,
+    })
+}
+
 pub async fn copy_file_atomic<F: AsRef<Path>, T: AsRef<Path>>(
     from: F,
     to: T,
