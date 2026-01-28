@@ -5,11 +5,10 @@ use std::path::{Path, PathBuf};
 use displaydoc::Display;
 use indexmap::IndexMap;
 use rimu::{
-    from_serde_value, Number, SerdeValue, SerdeValueError, SourceId, Span, Spanned, Value,
-    ValueObject,
+    from_serde_value, Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject,
 };
-use rimu_interop::{to_rimu, FromRimu, ToRimuError};
-use serde::{de::DeserializeOwned, Serialize};
+use rimu_interop::{FromRimu, ToRimuError};
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -142,10 +141,19 @@ impl ParamValue {
                 ParamValue::Object(object)
             }
             (ParamType::HostPath, Value::String(value)) => {
-                let source_path = PathBuf::from(span.source().as_str());
-                let value_path = PathBuf::from(value);
-                let host_path = source_path.join(value_path);
-                ParamValue::HostPath(host_path)
+                if value.starts_with("lusid://") {
+                    let host_path = PathBuf::from(value.strip_prefix("lusid://").unwrap());
+                    println!("host path {}", host_path.display());
+                    ParamValue::HostPath(host_path)
+                } else {
+                    let value_path = PathBuf::from(value);
+                    let source_path = PathBuf::from(span.source().as_str());
+                    let source_dir_path = source_path
+                        .parent()
+                        .expect("source should have parent directory");
+                    let host_path = source_dir_path.join(value_path);
+                    ParamValue::HostPath(host_path)
+                }
             }
             (ParamType::TargetPath, Value::String(value)) => ParamValue::TargetPath(value),
             _ => {
@@ -162,11 +170,11 @@ pub struct ParamValues(IndexMap<String, Spanned<ParamValue>>);
 
 #[derive(Debug, Clone, Error, Display)]
 pub enum ParamValuesFromTypeError {
-    /// Failed to convert serializable value to Rimu
+    /// Failed to convert serializable value to Rimu: {0}
     ToRimu(#[from] ToRimuError),
-    /// Failed to convert Rimu value into parameter values
+    /// Failed to convert Rimu value into parameter values: {0}
     FromRimu(#[from] ParamValuesFromRimuError),
-    /// Failed validation
+    /// Failed validation: {0}
     Validation(#[from] ParamsValidationError),
 }
 

@@ -22,24 +22,24 @@ pub enum FileParams {
     Source {
         source: FilePath,
         path: FilePath,
-        mode: FileMode,
-        user: FileUser,
-        group: FileGroup,
+        mode: Option<FileMode>,
+        user: Option<FileUser>,
+        group: Option<FileGroup>,
     },
     File {
         path: FilePath,
-        mode: FileMode,
-        user: FileUser,
-        group: FileGroup,
+        mode: Option<FileMode>,
+        user: Option<FileUser>,
+        group: Option<FileGroup>,
     },
     FileAbsent {
         path: FilePath,
     },
     Directory {
         path: FilePath,
-        mode: FileMode,
-        user: FileUser,
-        group: FileGroup,
+        mode: Option<FileMode>,
+        user: Option<FileUser>,
+        group: Option<FileGroup>,
     },
     DirectoryAbsent {
         path: FilePath,
@@ -257,63 +257,85 @@ impl ResourceType for File {
                 mode,
                 user,
                 group,
-            } => vec![
-                CausalityTree::leaf(
+            } => {
+                let mut nodes = vec![CausalityTree::leaf(
                     CausalityMeta::id("file".into()),
                     FileResource::FileSource {
                         source,
                         path: path.clone(),
                     },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["file".into()]),
-                    FileResource::Mode {
-                        path: path.clone(),
-                        mode,
-                    },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["file".into()]),
-                    FileResource::User {
-                        path: path.clone(),
-                        user,
-                    },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["file".into()]),
-                    FileResource::Group { path, group },
-                ),
-            ],
+                )];
+
+                if let Some(mode) = mode {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["file".into()]),
+                        FileResource::Mode {
+                            path: path.clone(),
+                            mode,
+                        },
+                    ));
+                }
+
+                if let Some(user) = user {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["file".into()]),
+                        FileResource::User {
+                            path: path.clone(),
+                            user,
+                        },
+                    ))
+                }
+
+                if let Some(group) = group {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["file".into()]),
+                        FileResource::Group { path, group },
+                    ));
+                }
+
+                nodes
+            }
 
             FileParams::File {
                 path,
                 mode,
                 user,
                 group,
-            } => vec![
-                CausalityTree::leaf(
+            } => {
+                let mut nodes = vec![CausalityTree::leaf(
                     CausalityMeta::id("file".into()),
                     FileResource::FilePresent { path: path.clone() },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["file".into()]),
-                    FileResource::Mode {
-                        path: path.clone(),
-                        mode,
-                    },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["file".into()]),
-                    FileResource::User {
-                        path: path.clone(),
-                        user,
-                    },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["file".into()]),
-                    FileResource::Group { path, group },
-                ),
-            ],
+                )];
+
+                if let Some(mode) = mode {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["file".into()]),
+                        FileResource::Mode {
+                            path: path.clone(),
+                            mode,
+                        },
+                    ));
+                }
+
+                if let Some(user) = user {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["file".into()]),
+                        FileResource::User {
+                            path: path.clone(),
+                            user,
+                        },
+                    ));
+                }
+
+                if let Some(group) = group {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["file".into()]),
+                        FileResource::Group { path, group },
+                    ));
+                }
+
+                nodes
+            }
 
             FileParams::FileAbsent { path } => vec![CausalityTree::leaf(
                 CausalityMeta::default(),
@@ -325,30 +347,41 @@ impl ResourceType for File {
                 mode,
                 user,
                 group,
-            } => vec![
-                CausalityTree::leaf(
+            } => {
+                let mut nodes = vec![CausalityTree::leaf(
                     CausalityMeta::id("directory".into()),
                     FileResource::DirectoryPresent { path: path.clone() },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["directory".into()]),
-                    FileResource::Mode {
-                        path: path.clone(),
-                        mode,
-                    },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["directory".into()]),
-                    FileResource::User {
-                        path: path.clone(),
-                        user,
-                    },
-                ),
-                CausalityTree::leaf(
-                    CausalityMeta::before(vec!["directory".into()]),
-                    FileResource::Group { path, group },
-                ),
-            ],
+                )];
+
+                if let Some(mode) = mode {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["directory".into()]),
+                        FileResource::Mode {
+                            path: path.clone(),
+                            mode,
+                        },
+                    ));
+                }
+
+                if let Some(user) = user {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["directory".into()]),
+                        FileResource::User {
+                            path: path.clone(),
+                            user,
+                        },
+                    ));
+                }
+
+                if let Some(group) = group {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::before(vec!["directory".into()]),
+                        FileResource::Group { path, group },
+                    ));
+                }
+
+                nodes
+            }
 
             FileParams::DirectoryAbsent { path } => vec![CausalityTree::leaf(
                 CausalityMeta::default(),
