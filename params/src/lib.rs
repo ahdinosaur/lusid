@@ -102,58 +102,118 @@ impl ParamValue {
             ParamValue::TargetPath(path) => Value::String(path),
         }
     }
+}
 
+#[derive(Debug, Clone, Error, Display)]
+pub enum ParamValueFromRimuError {
+    /// Expected literal value ({value}) to equal type ({typ})
+    LiteralNotEqual { value: Box<Value>, typ: Box<Value> },
+
+    /// Error with list at index {index}: {error}
+    List {
+        index: usize,
+        error: Box<Spanned<ParamValueFromRimuError>>,
+    },
+
+    /// Error with object at key {key}: {error}
+    Object {
+        key: String,
+        error: Box<Spanned<ParamValueFromRimuError>>,
+    },
+
+    /// Host path source needs parent: {source_path}
+    HostPathSourceNeedsParent { source_path: PathBuf },
+
+    /// Unexpected param type + value case
+    UnexpectedParamTypeValueCase {
+        typ: Box<ParamType>,
+        value: Box<Value>,
+    },
+}
+
+impl ParamValue {
     fn from_rimu_spanned(
         value: Spanned<Value>,
         typ: ParamType,
-    ) -> Result<Spanned<Self>, Spanned<ParamValuesFromRimuError>> {
+    ) -> Result<Spanned<Self>, Spanned<ParamValueFromRimuError>> {
         let (value, span) = value.take();
 
-        let param_value = match (typ, value) {
-            (ParamType::Literal(literal), value) => {
-                if literal != value {
-                    panic!("Expected literal to equal value")
+        let result = match (typ, value) {
+            (ParamType::Literal(typ), value) => {
+                if typ != value {
+                    Err(ParamValueFromRimuError::LiteralNotEqual {
+                        value: Box::new(value),
+                        typ: Box::new(typ),
+                    })
+                } else {
+                    Ok(ParamValue::Literal(value))
                 }
-                ParamValue::Literal(literal)
             }
-            (ParamType::Boolean, Value::Boolean(value)) => ParamValue::Boolean(value),
-            (ParamType::String, Value::String(value)) => ParamValue::String(value),
-            (ParamType::Number, Value::Number(value)) => ParamValue::Number(value),
+            (ParamType::Boolean, Value::Boolean(value)) => Ok(ParamValue::Boolean(value)),
+            (ParamType::String, Value::String(value)) => Ok(ParamValue::String(value)),
+            (ParamType::Number, Value::Number(value)) => Ok(ParamValue::Number(value)),
             (ParamType::List { item: item_type }, Value::List(items)) => {
                 let items = items
                     .into_iter()
-                    .map(|item| ParamValue::from_rimu_spanned(item, item_type.inner().clone()))
+                    .enumerate()
+                    .map(|(index, item)| {
+                        ParamValue::from_rimu_spanned(item, item_type.inner().clone()).map_err(
+                            |error| {
+                                Spanned::new(
+                                    ParamValueFromRimuError::List {
+                                        index,
+                                        error: Box::new(error),
+                                    },
+                                    span.clone(),
+                                )
+                            },
+                        )
+                    })
                     .collect::<Result<_, _>>()?;
-                ParamValue::List(items)
+                Ok(ParamValue::List(items))
             }
             (ParamType::Object { value: value_type }, Value::Object(object)) => {
                 let object = object
                     .into_iter()
                     .map(|(key, value)| {
-                        Ok::<_, Spanned<ParamValuesFromRimuError>>((
-                            key,
-                            ParamValue::from_rimu_spanned(value, value_type.inner().clone())?,
+                        Ok((
+                            key.clone(),
+                            ParamValue::from_rimu_spanned(value, value_type.inner().clone())
+                                .map_err(|error| {
+                                    Spanned::new(
+                                        ParamValueFromRimuError::Object {
+                                            key,
+                                            error: Box::new(error),
+                                        },
+                                        span.clone(),
+                                    )
+                                })?,
                         ))
                     })
                     .collect::<Result<_, _>>()?;
-                ParamValue::Object(object)
+                Ok(ParamValue::Object(object))
             }
             (ParamType::HostPath, Value::String(value)) => {
                 let value_path = PathBuf::from(value);
                 let source_path = PathBuf::from(span.source().as_str());
-                let source_dir_path = source_path
-                    .parent()
-                    .expect("source should have parent directory");
-                let host_path = source_dir_path.join(value_path);
-                ParamValue::HostPath(host_path)
+                let source_dir_path = source_path.parent();
+                if let Some(source_dir_path) = source_dir_path {
+                    let host_path = source_dir_path.join(value_path);
+                    Ok(ParamValue::HostPath(host_path))
+                } else {
+                    Err(ParamValueFromRimuError::HostPathSourceNeedsParent { source_path })
+                }
             }
-            (ParamType::TargetPath, Value::String(value)) => ParamValue::TargetPath(value),
-            _ => {
-                panic!("Unexpected param type + value case")
-            }
+            (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
+            (typ, value) => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
+                typ: Box::new(typ),
+                value: Box::new(value),
+            }),
         };
 
-        Ok(Spanned::new(param_value, span))
+        result
+            .map(|value| Spanned::new(value, span.clone()))
+            .map_err(|error| Spanned::new(error, span.clone()))
     }
 }
 
@@ -164,8 +224,10 @@ pub struct ParamValues(IndexMap<String, Spanned<ParamValue>>);
 pub enum ParamValuesFromTypeError {
     /// Failed to convert serializable value to Rimu: {0}
     ToRimu(#[from] ToRimuError),
+
     /// Failed to convert Rimu value into parameter values: {0}
     FromRimu(#[from] ParamValuesFromRimuError),
+
     /// Failed validation: {0}
     Validation(#[from] ParamsValidationError),
 }
@@ -174,6 +236,15 @@ pub enum ParamValuesFromTypeError {
 pub enum ParamValuesFromRimuError {
     /// Expected an object mapping parameter names to values
     NotAnObject,
+
+    /// Expected param missing: {key}
+    ParamMissing { key: String },
+
+    /// Error with param {key}: {error}
+    Param {
+        key: String,
+        error: Box<Spanned<ParamValueFromRimuError>>,
+    },
 }
 
 impl ParamValues {
@@ -190,13 +261,30 @@ impl ParamValues {
         let mut param_values = IndexMap::new();
 
         for (key, field_value) in object_value.into_iter() {
-            let field_type = type_struct.get(&key).expect("key to exist").inner();
+            let field_type = type_struct
+                .get(&key)
+                .ok_or_else(|| {
+                    Spanned::new(
+                        ParamValuesFromRimuError::ParamMissing { key: key.clone() },
+                        span.clone(),
+                    )
+                })?
+                .inner();
 
             if *field_type.optional() && matches!(field_value.inner(), Value::Null) {
                 continue;
             }
 
-            let param_value = ParamValue::from_rimu_spanned(field_value, field_type.typ().clone())?;
+            let param_value = ParamValue::from_rimu_spanned(field_value, field_type.typ().clone())
+                .map_err(|error| {
+                    Spanned::new(
+                        ParamValuesFromRimuError::Param {
+                            key: key.clone(),
+                            error: Box::new(error),
+                        },
+                        span.clone(),
+                    )
+                })?;
             param_values.insert(key, param_value);
         }
 
