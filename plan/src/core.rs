@@ -1,6 +1,6 @@
 use lusid_params::{validate, ParamValues};
-use lusid_resource::{apt::Apt, ResourceParams, ResourceType};
-use rimu::Spanned;
+use lusid_resource::{apt::Apt, file::File, ResourceParams, ResourceType};
+use rimu::{Spanned, Value};
 
 use crate::PlanItemToResourceError;
 
@@ -10,10 +10,11 @@ pub fn is_core_module(module: &Spanned<String>) -> Option<&str> {
 
 pub fn core_module(
     core_module_id: &str,
-    param_values: Option<Spanned<ParamValues>>,
+    params: Option<Spanned<Value>>,
 ) -> Result<ResourceParams, PlanItemToResourceError> {
     match core_module_id {
-        Apt::ID => core_module_for_resource::<Apt>(param_values).map(ResourceParams::Apt),
+        Apt::ID => core_module_for_resource::<Apt>(params).map(ResourceParams::Apt),
+        File::ID => core_module_for_resource::<File>(params).map(ResourceParams::File),
         other => Err(PlanItemToResourceError::UnsupportedCoreModuleId {
             id: other.to_string(),
         }),
@@ -21,14 +22,17 @@ pub fn core_module(
 }
 
 fn core_module_for_resource<R: ResourceType>(
-    param_values: Option<Spanned<ParamValues>>,
+    params_value: Option<Spanned<Value>>,
 ) -> Result<R::Params, PlanItemToResourceError> {
-    let param_values = param_values.ok_or(PlanItemToResourceError::MissingParams)?;
+    let params_value = params_value.ok_or(PlanItemToResourceError::MissingParams)?;
     let param_types = R::param_types();
-    validate(param_types.as_ref(), Some(&param_values)).map_err(PlanItemToResourceError::from)?;
-    let params: R::Params = param_values
-        .into_inner()
-        .into_type()
-        .map_err(PlanItemToResourceError::from)?;
+
+    let params_struct = validate(param_types.as_ref(), Some(&params_value))?;
+    let params_struct = params_struct.expect("params struc should exist for core module");
+
+    let param_values = ParamValues::from_rimu_spanned(params_value, params_struct)
+        .map_err(PlanItemToResourceError::ParamsValueFromRimu)?;
+
+    let params: R::Params = param_values.into_inner().into_type()?;
     Ok(params)
 }

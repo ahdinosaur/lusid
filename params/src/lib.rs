@@ -1,19 +1,26 @@
 //! Parameter schemas and values.
 
+use std::path::{Path, PathBuf};
+
 use displaydoc::Display;
 use indexmap::IndexMap;
-use rimu::{from_serde_value, SerdeValue, SerdeValueError, SourceId, Span, Spanned, Value};
-use rimu_interop::{to_rimu, FromRimu, ToRimuError};
-use serde::{de::DeserializeOwned, Serialize};
+use rimu::{
+    from_serde_value, Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject,
+};
+use rimu_interop::{FromRimu, ToRimuError};
+use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub enum ParamType {
+    Literal(Value),
     Boolean,
     String,
     Number,
     List { item: Box<Spanned<ParamType>> },
     Object { value: Box<Spanned<ParamType>> },
+    HostPath,
+    TargetPath,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +37,13 @@ impl ParamField {
         }
     }
 
+    pub fn with_optional(self) -> Self {
+        Self {
+            typ: self.typ,
+            optional: true,
+        }
+    }
+
     pub fn typ(&self) -> &ParamType {
         &self.typ
     }
@@ -39,63 +53,259 @@ impl ParamField {
     }
 }
 
+pub type ParamsStruct = IndexMap<String, Spanned<ParamField>>;
+
 #[derive(Debug, Clone)]
 pub enum ParamTypes {
     // A single object structure: keys -> fields
-    Struct(IndexMap<String, Spanned<ParamField>>),
+    Struct(ParamsStruct),
     // A union of possible object structures.
-    Union(Vec<IndexMap<String, Spanned<ParamField>>>),
+    Union(Vec<ParamsStruct>),
+}
+
+#[derive(Debug, Clone)]
+pub enum ParamValue {
+    Literal(Value),
+    Boolean(bool),
+    String(String),
+    Number(Number),
+    List(Vec<Spanned<ParamValue>>),
+    Object(IndexMap<String, Spanned<ParamValue>>),
+    HostPath(PathBuf),
+    TargetPath(String),
+}
+
+impl ParamValue {
+    pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
+        let (value, span) = value.take();
+        Spanned::new(value.into_rimu(), span)
+    }
+
+    pub fn into_rimu(self) -> Value {
+        match self {
+            ParamValue::Literal(value) => value,
+            ParamValue::Boolean(value) => Value::Boolean(value),
+            ParamValue::String(value) => Value::String(value),
+            ParamValue::Number(number) => Value::Number(number),
+            ParamValue::List(items) => {
+                let items = items.into_iter().map(Self::into_rimu_spanned).collect();
+                Value::List(items)
+            }
+            ParamValue::Object(map) => {
+                let map = map
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::into_rimu_spanned(value)))
+                    .collect();
+                Value::Object(map)
+            }
+            ParamValue::HostPath(path) => Value::String(path.to_string_lossy().into_owned()),
+            ParamValue::TargetPath(path) => Value::String(path),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Error, Display)]
+pub enum ParamValueFromRimuError {
+    /// Expected literal value ({value}) to equal type ({typ})
+    LiteralNotEqual { value: Box<Value>, typ: Box<Value> },
+
+    /// Error with list at index {index}: {error}
+    List {
+        index: usize,
+        error: Box<Spanned<ParamValueFromRimuError>>,
+    },
+
+    /// Error with object at key {key}: {error}
+    Object {
+        key: String,
+        error: Box<Spanned<ParamValueFromRimuError>>,
+    },
+
+    /// Host path source needs parent: {source_path}
+    HostPathSourceNeedsParent { source_path: PathBuf },
+
+    /// Unexpected param type + value case
+    UnexpectedParamTypeValueCase {
+        typ: Box<ParamType>,
+        value: Box<Value>,
+    },
+}
+
+impl ParamValue {
+    fn from_rimu_spanned(
+        value: Spanned<Value>,
+        typ: ParamType,
+    ) -> Result<Spanned<Self>, Spanned<ParamValueFromRimuError>> {
+        let (value, span) = value.take();
+
+        let result = match (typ, value) {
+            (ParamType::Literal(typ), value) => {
+                if typ != value {
+                    Err(ParamValueFromRimuError::LiteralNotEqual {
+                        value: Box::new(value),
+                        typ: Box::new(typ),
+                    })
+                } else {
+                    Ok(ParamValue::Literal(value))
+                }
+            }
+            (ParamType::Boolean, Value::Boolean(value)) => Ok(ParamValue::Boolean(value)),
+            (ParamType::String, Value::String(value)) => Ok(ParamValue::String(value)),
+            (ParamType::Number, Value::Number(value)) => Ok(ParamValue::Number(value)),
+            (ParamType::List { item: item_type }, Value::List(items)) => {
+                let items = items
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, item)| {
+                        ParamValue::from_rimu_spanned(item, item_type.inner().clone()).map_err(
+                            |error| {
+                                Spanned::new(
+                                    ParamValueFromRimuError::List {
+                                        index,
+                                        error: Box::new(error),
+                                    },
+                                    span.clone(),
+                                )
+                            },
+                        )
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(ParamValue::List(items))
+            }
+            (ParamType::Object { value: value_type }, Value::Object(object)) => {
+                let object = object
+                    .into_iter()
+                    .map(|(key, value)| {
+                        Ok((
+                            key.clone(),
+                            ParamValue::from_rimu_spanned(value, value_type.inner().clone())
+                                .map_err(|error| {
+                                    Spanned::new(
+                                        ParamValueFromRimuError::Object {
+                                            key,
+                                            error: Box::new(error),
+                                        },
+                                        span.clone(),
+                                    )
+                                })?,
+                        ))
+                    })
+                    .collect::<Result<_, _>>()?;
+                Ok(ParamValue::Object(object))
+            }
+            (ParamType::HostPath, Value::String(value)) => {
+                let value_path = PathBuf::from(value);
+                let source_path = PathBuf::from(span.source().as_str());
+                let source_dir_path = source_path.parent();
+                if let Some(source_dir_path) = source_dir_path {
+                    let host_path = source_dir_path.join(value_path);
+                    Ok(ParamValue::HostPath(host_path))
+                } else {
+                    Err(ParamValueFromRimuError::HostPathSourceNeedsParent { source_path })
+                }
+            }
+            (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
+            (typ, value) => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
+                typ: Box::new(typ),
+                value: Box::new(value),
+            }),
+        };
+
+        result
+            .map(|value| Spanned::new(value, span.clone()))
+            .map_err(|error| Spanned::new(error, span.clone()))
+    }
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct ParamValues(IndexMap<String, Spanned<Value>>);
+pub struct ParamValues(IndexMap<String, Spanned<ParamValue>>);
 
 #[derive(Debug, Clone, Error, Display)]
 pub enum ParamValuesFromTypeError {
-    /// Failed to convert serializable value to Rimu
+    /// Failed to convert serializable value to Rimu: {0}
     ToRimu(#[from] ToRimuError),
-    /// Failed to convert Rimu value into parameter values
-    FromRimu(#[from] ParamValuesFromRimuError),
-}
 
-impl ParamValues {
-    pub fn from_type<T>(
-        value: T,
-        source_id: SourceId,
-    ) -> Result<Spanned<Self>, ParamValuesFromTypeError>
-    where
-        T: Serialize,
-    {
-        let rimu_value = to_rimu(value, source_id)?;
-        let param_values =
-            ParamValues::from_rimu_spanned(rimu_value).map_err(Spanned::into_inner)?;
-        Ok(param_values)
-    }
+    /// Failed to convert Rimu value into parameter values: {0}
+    FromRimu(#[from] ParamValuesFromRimuError),
+
+    /// Failed validation: {0}
+    Validation(#[from] ParamsValidationError),
 }
 
 #[derive(Debug, Clone, Error, Display)]
 pub enum ParamValuesFromRimuError {
     /// Expected an object mapping parameter names to values
     NotAnObject,
-}
 
-impl FromRimu for ParamValues {
-    type Error = ParamValuesFromRimuError;
+    /// Expected param missing: {key}
+    ParamMissing { key: String },
 
-    fn from_rimu(value: Value) -> Result<Self, Self::Error> {
-        let Value::Object(object) = value else {
-            return Err(ParamValuesFromRimuError::NotAnObject);
-        };
-        Ok(ParamValues(object))
-    }
+    /// Error with param {key}: {error}
+    Param {
+        key: String,
+        error: Box<Spanned<ParamValueFromRimuError>>,
+    },
 }
 
 impl ParamValues {
-    pub fn into_rimu(self) -> Value {
-        Value::Object(self.0)
+    pub fn from_rimu_spanned(
+        value: Spanned<Value>,
+        type_struct: ParamsStruct,
+    ) -> Result<Spanned<Self>, Spanned<ParamValuesFromRimuError>> {
+        let (value, span) = value.take();
+
+        let Value::Object(object_value) = value else {
+            return Err(Spanned::new(ParamValuesFromRimuError::NotAnObject, span));
+        };
+
+        let mut param_values = IndexMap::new();
+
+        for (key, field_value) in object_value.into_iter() {
+            let field_type = type_struct
+                .get(&key)
+                .ok_or_else(|| {
+                    Spanned::new(
+                        ParamValuesFromRimuError::ParamMissing { key: key.clone() },
+                        span.clone(),
+                    )
+                })?
+                .inner();
+
+            if *field_type.optional() && matches!(field_value.inner(), Value::Null) {
+                continue;
+            }
+
+            let param_value = ParamValue::from_rimu_spanned(field_value, field_type.typ().clone())
+                .map_err(|error| {
+                    Spanned::new(
+                        ParamValuesFromRimuError::Param {
+                            key: key.clone(),
+                            error: Box::new(error),
+                        },
+                        span.clone(),
+                    )
+                })?;
+            param_values.insert(key, param_value);
+        }
+
+        Ok(Spanned::new(ParamValues(param_values), span))
     }
 
-    pub fn get(&self, key: &str) -> Option<&Spanned<Value>> {
+    pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
+        let (value, span) = value.take();
+        Spanned::new(value.into_rimu(), span)
+    }
+
+    pub fn into_rimu(self) -> Value {
+        let object = self
+            .0
+            .into_iter()
+            .map(|(key, value)| (key, ParamValue::into_rimu_spanned(value)))
+            .collect();
+        Value::Object(object)
+    }
+
+    pub fn get(&self, key: &str) -> Option<&Spanned<ParamValue>> {
         self.0.get(key)
     }
 
@@ -103,7 +313,7 @@ impl ParamValues {
     where
         T: DeserializeOwned,
     {
-        let value = Value::Object(self.0);
+        let value = self.into_rimu();
         let serde_value = SerdeValue::from(value);
         from_serde_value(serde_value)
     }
@@ -150,6 +360,8 @@ impl FromRimu for ParamType {
             "boolean" => Ok(ParamType::Boolean),
             "string" => Ok(ParamType::String),
             "number" => Ok(ParamType::Number),
+            "host-path" => Ok(ParamType::HostPath),
+            "target-path" => Ok(ParamType::TargetPath),
             "list" => {
                 let item = object
                     .swap_remove("item")
@@ -303,11 +515,13 @@ pub enum ValidateValueError {
     /// Invalid list item at index {index}: {error:?}
     ListItem {
         index: usize,
+        #[source]
         error: Box<ValidateValueError>,
     },
     /// Invalid object entry for key "{key}": {error:?}
     ObjectEntry {
         key: String,
+        #[source]
         error: Box<ValidateValueError>,
     },
 }
@@ -343,9 +557,11 @@ pub enum ParamsValidationError {
     ValuesWithoutTypes,
     /// Parameter types without parameter values
     TypesWithoutValues,
-    /// Parameter struct did not match all fields
+    /// Expected an object for parameter values
+    ValuesNotAnObject,
+    /// Parameter struct did not match all fields: {0}
     Struct(#[from] Box<ParamsStructValidationError>),
-    /// Parameter union did not match any case
+    /// Parameter union did not match any case: {case_errors:?}
     Union {
         case_errors: Vec<ParamsStructValidationError>,
     },
@@ -368,6 +584,13 @@ fn validate_type(
     let value_inner = value.inner();
 
     match typ_inner {
+        ParamType::Literal(literal) => {
+            if value.inner() == literal {
+                Ok(())
+            } else {
+                Err(mismatch(param_type, value))
+            }
+        }
         ParamType::Boolean => match value_inner {
             Value::Boolean(_) => Ok(()),
             _ => Err(mismatch(param_type, value)),
@@ -382,6 +605,26 @@ fn validate_type(
             Value::Number(_) => Ok(()),
             _ => Err(mismatch(param_type, value)),
         },
+
+        ParamType::HostPath => {
+            #[allow(clippy::collapsible_if)]
+            if let Value::String(path) = value_inner {
+                if Path::new(path).is_relative() {
+                    return Ok(());
+                }
+            }
+            Err(mismatch(param_type, value))
+        }
+
+        ParamType::TargetPath => {
+            #[allow(clippy::collapsible_if)]
+            if let Value::String(path) = value_inner {
+                if Path::new(path).is_absolute() {
+                    return Ok(());
+                }
+            }
+            Err(mismatch(param_type, value))
+        }
 
         ParamType::List { item } => {
             let Value::List(items) = value_inner else {
@@ -421,7 +664,7 @@ fn validate_type(
 
 fn validate_struct(
     fields: &IndexMap<String, Spanned<ParamField>>,
-    values: &ParamValues,
+    values: &ValueObject,
 ) -> Result<(), ParamsStructValidationError> {
     let mut errors: Vec<ParamValidationError> = Vec::new();
 
@@ -430,7 +673,7 @@ fn validate_struct(
         let (field, field_span) = spanned_field.clone().take();
         let spanned_type = Spanned::new(field.typ().clone(), field_span);
 
-        match values.0.get(key) {
+        match values.get(key) {
             Some(spanned_value) => {
                 if let Err(error) = validate_type(&spanned_type, spanned_value) {
                     errors.push(ParamValidationError::InvalidParam {
@@ -451,7 +694,7 @@ fn validate_struct(
     }
 
     // Unknown keys.
-    for (key, spanned_value) in values.0.iter() {
+    for (key, spanned_value) in values.iter() {
         if !fields.contains_key(key) {
             errors.push(ParamValidationError::UnknownParam {
                 key: key.clone(),
@@ -471,8 +714,8 @@ fn validate_struct(
 // For Union: succeed if any one case validates; otherwise return all case errors.
 pub fn validate(
     param_types: Option<&Spanned<ParamTypes>>,
-    param_values: Option<&Spanned<ParamValues>>,
-) -> Result<(), ParamsValidationError> {
+    param_values: Option<&Spanned<Value>>,
+) -> Result<Option<ParamsStruct>, ParamsValidationError> {
     let (param_types, param_values) = match (param_types, param_values) {
         (Some(param_types), Some(param_values)) => (param_types, param_values),
         (Some(_), None) => {
@@ -482,18 +725,22 @@ pub fn validate(
             return Err(ParamsValidationError::ValuesWithoutTypes);
         }
         (None, None) => {
-            return Ok(());
+            return Ok(None);
         }
     };
 
     let param_types = param_types.inner();
     let param_values = param_values.inner();
 
+    let Value::Object(param_values) = param_values else {
+        return Err(ParamsValidationError::ValuesNotAnObject);
+    };
+
     match param_types {
         ParamTypes::Struct(map) => {
             validate_struct(map, param_values).map_err(Box::new)?;
 
-            Ok(())
+            Ok(Some(map.clone()))
         }
         ParamTypes::Union(cases) => {
             if cases.is_empty() {
@@ -504,7 +751,7 @@ pub fn validate(
 
             for case in cases {
                 match validate_struct(case, param_values) {
-                    Ok(()) => return Ok(()),
+                    Ok(()) => return Ok(Some(case.clone())),
                     Err(error) => case_errors.push(error),
                 }
             }

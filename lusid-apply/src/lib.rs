@@ -1,19 +1,22 @@
+use std::path::PathBuf;
+
 use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{compute_epochs, CausalityTree, EpochError};
 use lusid_ctx::{Context, ContextError};
 use lusid_operation::{Operation, OperationApplyError};
-use lusid_params::{ParamValues, ParamValuesFromTypeError};
 use lusid_plan::{self, map_plan_subitems, plan, render_plan_tree, PlanError, PlanId, PlanNodeId};
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_store::Store;
 use lusid_tree::FlatTree;
 use lusid_view::Render;
 use rimu::SourceId;
+use rimu_interop::{to_rimu, ToRimuError};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info};
 
 pub struct ApplyOptions {
+    pub root_path: PathBuf,
     pub plan_id: PlanId,
     pub params_json: Option<String>,
 }
@@ -26,6 +29,9 @@ pub enum ApplyError {
     #[error("failed to parse JSON parameters: {0}")]
     JsonParameters(#[source] serde_json::Error),
 
+    #[error("failed to parse parameters into rimu value: {0}")]
+    RimuParameters(#[from] ToRimuError),
+
     #[error("failed to output JSON: {0}")]
     JsonOutput(#[source] serde_json::Error),
 
@@ -37,9 +43,6 @@ pub enum ApplyError {
 
     #[error("failed to flush stdout: {0}")]
     FlushStdout(#[source] tokio::io::Error),
-
-    #[error("failed to convert parameters for Lusid: {0}")]
-    ParamValuesFromType(#[from] ParamValuesFromTypeError),
 
     #[error(transparent)]
     Plan(#[from] PlanError),
@@ -57,11 +60,12 @@ pub enum ApplyError {
 pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     info!("starting");
     let ApplyOptions {
+        root_path,
         plan_id,
         params_json,
     } = options;
 
-    let ctx = Context::create()?;
+    let mut ctx = Context::create(&root_path)?;
     let mut store = Store::new(ctx.paths().cache_dir());
 
     info!(plan = %plan_id, "using plan");
@@ -74,9 +78,8 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         Some(json) => {
             let value: serde_json::Value =
                 serde_json::from_str(&json).map_err(ApplyError::JsonParameters)?;
-            let source_id = SourceId::from("<cli:params>".to_string());
-            let params = ParamValues::from_type(value, source_id)?;
-            Some(params)
+            let value = to_rimu(value, SourceId::empty())?;
+            Some(value)
         }
     };
 
@@ -109,9 +112,12 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     emit(AppUpdate::ResourceStatesStart).await?;
     let resource_states = resources
         .map_result_async(
-            |resource| async move {
-                let state = resource.state().await?;
-                Ok::<(Resource, ResourceState), ApplyError>((resource, state))
+            |resource| {
+                let mut ctx = ctx.clone();
+                async move {
+                    let state = resource.state(&mut ctx).await?;
+                    Ok::<(Resource, ResourceState), ApplyError>((resource, state))
+                }
             },
             |index| emit(AppUpdate::ResourceStatesNodeStart { index }),
             |index, (_resource, resource_state)| {
@@ -201,7 +207,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
             emit(AppUpdate::OperationApplyStart { index }).await?;
 
-            let (output, stdout, stderr) = operation.apply().await?;
+            let (output, stdout, stderr) = operation.apply(&mut ctx).await?;
 
             let output_task = async {
                 output.await?;
