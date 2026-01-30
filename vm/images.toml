@@ -12,4 +12,4 @@ os = { type = "linux", linux = "arch" }
 image = { type = "qcow2", url = "https://fastly.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2" }
 hash = { type = "sha256sums", url = "https://fastly.mirror.pkgbuild.com/images/latest/Arch-Linux-x86_64-cloudimg.qcow2.SHA256" }
 kernel_root = "/dev/vda3"
-user = "debian"
+user = "arch"
