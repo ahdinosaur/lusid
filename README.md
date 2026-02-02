@@ -1,65 +1,69 @@
 # lusid
 
-_STATUS: PROTOTYPING_
+_STATUS: MAD SCIENCE 🧪_
 
-> A modular config system for personal setups
+> A functional config system for personal setups
 
-Lusid provisions a fresh computer with the exact setup you need to be productive.
+## About
 
-Like .dotfiles on steroids, but less ideological than NixOS. Friendly and functional.
+Lusid helps you configure your computers with the exact setup you describe.
 
-In the past, I've relied on Salt Stack to automate my machine setup, but I think a better way is possible.
+Like .dotfiles on steroids, but less "pure" (ideological) than NixOS. Like Ansible or Salt Stack, but more friendly and functional for personal setups.
 
-See also:
+Lusid can be used for your workstations (desktops or laptops) or your servers (homelab or cloud).
 
-- [comtrya](https://github.com/comtrya/comtrya)
-- (legacy) [boxen](https://github.com/boxen/boxen)
+## Get Started
 
-## Mutable (impure) configuration
+### Install
 
-Using [the Rimu language](https://rimu.dev), describe a "plan":
+TODO
+
+### Create a plan
+
+TODO
+
+### Apply a plan
+
+TODO
+
+## Concepts
+
+### Plan
+
+A plan describes a modular set of resources you want to be applied to the machine.
+
+Plans are written in the [the Rimu language](https://rimu.dev):
 
 ```
-name: blah
-version: 0.1.0
+name: "example-git-setup"
+version: "0.1.0"
 
 params:
   whatever:
-    type: boolean
+    type: "boolean"
 
-setup: (params) =>
-  - module: ./stuff
+setup: (params, system) =>
+  - module: "@core/file"
     params:
-      stuff: true
-  - module: @core/apt
+      type: "source"
+      source: "./gitconfig"
+      path: system.user.home + ".gitconfig"
+
+  - module: "@core/apt"
     params:
-      package: nvim
-  - module: @core/install
-    params:
-      install: ...
-      update: ...
-      uninstall: ...
-      ...
+      packages: ["git"]
 ```
 
-To describe what you see:
+A plan:
 
-- The plan defines basic metadata like name and version (e.g. think `package.json` or `Cargo.toml`)
-- The plan defines parameters that it expects to receive
-- The plan defines a `setup` function, which return a list of modules to install.
-  - These modules can be defined as a user plan in other places, in which case they are called.
-  - There is a limited set of core states, which are defined in Rust and called like any other module.
+- Defines basic metadata like name and version (e.g. think `package.json` or `Cargo.toml`)
+- Defines parameters that it expects to receive
+- Defines a `setup` function, which return a list of items to apply.
+  - An item can refer to another plan defined by the user, in which case they are called.
+  - Or, an item can a core states, these are defined in Rust and called like any other plan.
+- Items can be dependent: there is a way to say this happens _before_ or _after_ this.
 
-Not shown but is included:
-
-- Like Salt Stack, there is a way to say this happens _before_ or _after_ this.
-
-Not shown but should be included:
-
-- Like Salt Stack, there should be something like "grains" that provide the details of the current system (operating system, etc).
-  - This way you can write a block to be generic over any operating system.
-
-As for the execution:
+When a plan is applied:
 
 - Given the inputs, the outputs should construct a tree.
   - The branches are user modules, the leaves are core states.
@@ -70,21 +74,16 @@ As for the execution:
 - Merge all operations of the same type in the same epoch.
 - Iterate through each epoch in order, applying the operations.
 
-## Immutable (pure) builds
+## Roadmap
 
-We could also have an immutable build system, similar to Nix.
+- [ ] Implement my complete personal "SnugOS" config
+- [ ] Add system (i.e. Salt Stack "grains"): https://github.com/ahdinosaur/lusid/issues/9
+- [ ] Add secrets management: https://github.com/ahdinosaur/lusid/issues/7
+- [ ] Add Nix-like immutable package builder: https://github.com/ahdinosaur/lusid/issues/1
+- [ ] Add unit testing framework for plans: https://github.com/ahdinosaur/lusid/issues/11
+- [ ] Add install hooks: https://github.com/ahdinosaur/lusid/issues/31
 
-Each build has:
+## Related projects
 
-- inputs: from local files or the outputs of other builds
-- command: a command to run in a sandboxed directory with the inputs
-- outputs: what output files we want to store from the build
-
-## Personal history
-
-1. dotfiles (Ubuntu -> Arch Linux): [`dotfiles2`](https://github.com/ahdinosaur/dotfiles2) / [`dotfiles`](https://github.com/ahdinosaur/dotfiles) / [`dot`](https://github.com/ahdinosaur/dot)
-1. CfEngine3 (Gentoo): [`command-center`](https://github.com/ahdinosaur/command-center) / [`blue-dream-masterfiles`](https://github.com/ahdinosaur/blue-dream-masterfiles) / [`bootstraps`](https://github.com/ahdinosaur/bootstraps) / [`dinolay`](https://github.com/ahdinosaur/dinolay)
-1. Puppet (Debian): [`dino-puppet`](https://github.com/ahdinosaur/dino-puppet)
-1. Salt Stack (Debian): [`ahdinosaur-os`](https://github.com/ahdinosaur-os/config)
-1. JavaScript (Regolith, Ubuntu): [`dinos`](https://github.com/ahdinosaur/dinos)
-1. more Salt Stack (Regolith, Ubuntu -> Debian): [`dinofarm`](https://github.com/ahdinosaur/dinofarm)
+- [comtrya](https://github.com/comtrya/comtrya)
+- (legacy) [boxen](https://github.com/boxen/boxen)
