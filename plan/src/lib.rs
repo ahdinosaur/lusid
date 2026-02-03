@@ -2,6 +2,7 @@ use displaydoc::Display;
 use lusid_params::{validate, ParamValuesFromRimuError, ParamsValidationError};
 use lusid_resource::ResourceParams;
 use lusid_store::{Store, StoreError, StoreItemId};
+use lusid_system::System;
 use rimu::{Spanned, Value};
 use std::{path::PathBuf, string::FromUtf8Error};
 use thiserror::Error;
@@ -54,9 +55,10 @@ pub async fn plan(
     plan_id: PlanId,
     params_value: Option<Spanned<Value>>,
     store: &mut Store,
+    system: &System,
 ) -> Result<PlanTree<ResourceParams>, PlanError> {
     tracing::debug!("Plan {plan_id:?} with params {params_value:?}");
-    let children = plan_recursive(plan_id, params_value.as_ref(), store).await?;
+    let children = plan_recursive(plan_id, params_value.as_ref(), store, system).await?;
     let tree = PlanTree::Branch {
         children,
         meta: PlanMeta::default(),
@@ -69,6 +71,7 @@ async fn plan_recursive(
     plan_id: PlanId,
     params_value: Option<&Spanned<Value>>,
     store: &mut Store,
+    system: &System,
 ) -> Result<Vec<PlanTree<ResourceParams>>, PlanError> {
     let store_item_id: StoreItemId = plan_id.clone().into();
     let bytes = store
@@ -90,11 +93,11 @@ async fn plan_recursive(
 
     let params_struct = validate(param_types.as_ref(), params_value)?;
 
-    let plan_items = evaluate(setup, params_value.cloned(), params_struct)?;
+    let plan_items = evaluate(setup, params_value.cloned(), params_struct, system)?;
 
     let mut resources = Vec::with_capacity(plan_items.len());
     for plan_item in plan_items {
-        let node = Box::pin(plan_item_to_resource(plan_item, &plan_id, store)).await?;
+        let node = Box::pin(plan_item_to_resource(plan_item, &plan_id, store, system)).await?;
         resources.push(node);
     }
 
@@ -126,6 +129,7 @@ async fn plan_item_to_resource(
     plan_item: Spanned<crate::model::PlanItem>,
     current_plan_id: &PlanId,
     store: &mut Store,
+    system: &System,
 ) -> Result<PlanTree<ResourceParams>, PlanItemToResourceError> {
     let (plan_item, _span) = plan_item.take();
     let crate::model::PlanItem {
@@ -166,7 +170,7 @@ async fn plan_item_to_resource(
     } else {
         let path = PathBuf::from(module.inner());
         let plan_id = current_plan_id.join(path);
-        let children = plan_recursive(plan_id, params_value.as_ref(), store)
+        let children = plan_recursive(plan_id, params_value.as_ref(), store, system)
             .await
             .map_err(Box::new)?;
         Ok(PlanTree::Branch {

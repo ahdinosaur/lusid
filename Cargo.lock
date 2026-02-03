@@ -2231,6 +2231,7 @@ dependencies = [
  "lusid-params",
  "lusid-resource",
  "lusid-store",
+ "lusid-system",
  "lusid-tree",
  "lusid-view",
  "rimu",

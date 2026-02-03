@@ -1,8 +1,10 @@
 use std::env;
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct User {
     pub name: String,
     pub home: PathBuf,

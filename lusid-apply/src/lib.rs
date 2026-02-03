@@ -7,6 +7,7 @@ use lusid_operation::{Operation, OperationApplyError};
 use lusid_plan::{self, map_plan_subitems, plan, render_plan_tree, PlanError, PlanId, PlanNodeId};
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_store::Store;
+use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
 use lusid_view::Render;
 use rimu::SourceId;
@@ -25,6 +26,9 @@ pub struct ApplyOptions {
 pub enum ApplyError {
     #[error(transparent)]
     Context(#[from] ContextError),
+
+    #[error("failed to get system: {0}")]
+    GetSystem(#[from] GetSystemError),
 
     #[error("failed to parse JSON parameters: {0}")]
     JsonParameters(#[source] serde_json::Error),
@@ -67,6 +71,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
     let mut ctx = Context::create(&root_path)?;
     let mut store = Store::new(ctx.paths().cache_dir());
+    let system = System::get().await?;
 
     info!(plan = %plan_id, "using plan");
 
@@ -84,7 +89,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     };
 
     // Parse/evaluate to tree of resource params.
-    let resource_params = plan(plan_id, param_values, &mut store).await?;
+    let resource_params = plan(plan_id, param_values, &mut store, &system).await?;
     debug!("Resource params: {resource_params:?}");
     emit(AppUpdate::ResourceParams {
         resource_params: render_plan_tree(resource_params.clone()),

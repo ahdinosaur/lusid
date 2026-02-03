@@ -1,7 +1,8 @@
 use displaydoc::Display;
 use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};
-use rimu::{call, Spanned, Value};
-use rimu_interop::FromRimu;
+use lusid_system::System;
+use rimu::{call, SourceId, Span, Spanned, Value};
+use rimu_interop::{to_rimu, FromRimu};
 use thiserror::Error;
 
 use crate::model::{IntoPlanItemError, PlanItem, SetupFunction};
@@ -10,10 +11,16 @@ use crate::model::{IntoPlanItemError, PlanItem, SetupFunction};
 pub enum EvalError {
     /// Converting params from rimu value failed: {0}
     Params(Box<Spanned<ParamValuesFromRimuError>>),
+
+    /// Converting system to rimu value failed: {0}
+    System(#[from] rimu_interop::ToRimuError),
+
     /// Calling setup function failed: {0}
     RimuCall(#[from] Box<rimu::EvalError>),
+
     /// Setup returned a non-list value
     ReturnedNotList,
+
     /// Invalid PlanItem value: {0}
     InvalidPlanItem(Box<Spanned<IntoPlanItemError>>),
 }
@@ -22,18 +29,23 @@ pub(crate) fn evaluate(
     setup: Spanned<SetupFunction>,
     params_value: Option<Spanned<Value>>,
     params_struct: Option<ParamsStruct>,
+    system: &System,
 ) -> Result<Vec<Spanned<PlanItem>>, EvalError> {
     let (setup, setup_span) = setup.take();
 
+    let system_value = to_rimu(system, SourceId::empty())?;
     let args = match params_value {
-        None => vec![],
+        None => vec![
+            Spanned::new(Value::Null, Span::new(SourceId::empty(), 0, 0)),
+            system_value,
+        ],
         Some(params_value) => {
             let params_struct =
                 params_struct.expect("params struct should exist if params value exists");
             let param_values = ParamValues::from_rimu_spanned(params_value, params_struct)
                 .map_err(|error| EvalError::Params(Box::new(error)))?;
             let value = ParamValues::into_rimu_spanned(param_values);
-            vec![value]
+            vec![value, system_value]
         }
     };
 
