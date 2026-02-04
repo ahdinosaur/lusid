@@ -210,12 +210,11 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         for (operation_index, operation) in operations.iter().enumerate() {
             let index = (epoch_index, operation_index);
 
-            emit(AppUpdate::OperationApplyStart { index }).await?;
-
             let (output, stdout, stderr) = operation.apply(&mut ctx).await?;
 
             let output_task = async {
                 output.await?;
+
                 Ok::<(), ApplyError>(())
             };
 
@@ -255,12 +254,16 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
                 }
             };
 
-            tokio::try_join!(output_task, stdout_task, stderr_task)?;
-
-            emit(AppUpdate::OperationApplyComplete {
-                index: (epoch_index, operation_index),
-            })
-            .await?;
+            if let Err(error) = tokio::try_join!(output_task, stdout_task, stderr_task) {
+                emit(AppUpdate::OperationApplyComplete {
+                    index,
+                    error: Some(error.to_string()),
+                })
+                .await?;
+                return Err(error);
+            } else {
+                emit(AppUpdate::OperationApplyComplete { index, error: None }).await?;
+            }
         }
     }
 

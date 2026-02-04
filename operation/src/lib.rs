@@ -68,8 +68,10 @@ impl Operation {
 pub enum OperationApplyError {
     #[error("apt operation failed: {0:?}")]
     Apt(<Apt as OperationType>::ApplyError),
+
     #[error("pacman operation failed: {0:?}")]
     Pacman(<Pacman as OperationType>::ApplyError),
+
     #[error("file operation failed: {0:?}")]
     File(<File as OperationType>::ApplyError),
 }

@@ -882,7 +882,15 @@ fn draw_apply(
     let mut items: Vec<ListItem<'_>> = Vec::new();
     for (epoch_index, operations) in epochs.iter().enumerate() {
         for (operation_index, operation) in operations.iter().enumerate() {
-            let status = if operation.is_complete { "✅" } else { "…" };
+            let status = if operation.is_complete {
+                if operation.error.is_some() {
+                    "❌"
+                } else {
+                    "✅"
+                }
+            } else {
+                "…"
+            };
             let label = format!(
                 "[{status}] (epoch {epoch_index}, operation {operation_index}) {}",
                 operation.label
@@ -917,35 +925,45 @@ fn draw_apply(
 
     frame.render_stateful_widget(operations_list, layout[0], &mut list_state);
 
-    let mut stdout = String::new();
-    let mut stderr = String::new();
+    if let Some(selected) = state.selected_flat {
+        if let Some((epoch_index, operation_index)) =
+            state.flat_index_to_epoch_operation.get(selected).copied()
+        {
+            if let Some(operation) = epochs.get(epoch_index).and_then(|v| v.get(operation_index)) {
+                if let Some(error) = &operation.error {
+                    let operation_error_widget = Paragraph::new(error.clone())
+                        .block(Block::default().borders(Borders::ALL).title("error"))
+                        .wrap(Wrap { trim: false })
+                        .style(Style::default().fg(Color::White));
 
-    if let Some(sel) = state.selected_flat {
-        if let Some((e, o)) = state.flat_index_to_epoch_operation.get(sel).copied() {
-            if let Some(op) = epochs.get(e).and_then(|v| v.get(o)) {
-                stdout = op.stdout.clone();
-                stderr = op.stderr.clone();
+                    frame.render_widget(operation_error_widget, layout[1]);
+                } else {
+                    let stdout = &operation.stdout;
+                    let stderr = &operation.stderr;
+
+                    let logs_layout = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints(
+                            [Constraint::Percentage(60), Constraint::Percentage(40)].as_ref(),
+                        )
+                        .split(layout[1]);
+
+                    let stdout_widget = Paragraph::new(stdout.clone())
+                        .block(Block::default().borders(Borders::ALL).title("stdout"))
+                        .wrap(Wrap { trim: false })
+                        .style(Style::default().fg(Color::White));
+
+                    let stderr_widget = Paragraph::new(stderr.clone())
+                        .block(Block::default().borders(Borders::ALL).title("stderr"))
+                        .wrap(Wrap { trim: false })
+                        .style(Style::default().fg(Color::Red));
+
+                    frame.render_widget(stdout_widget, logs_layout[0]);
+                    frame.render_widget(stderr_widget, logs_layout[1]);
+                }
             }
         }
     }
-
-    let logs_layout = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)].as_ref())
-        .split(layout[1]);
-
-    let stdout_widget = Paragraph::new(stdout)
-        .block(Block::default().borders(Borders::ALL).title("stdout"))
-        .wrap(Wrap { trim: false })
-        .style(Style::default().fg(Color::White));
-
-    let stderr_widget = Paragraph::new(stderr)
-        .block(Block::default().borders(Borders::ALL).title("stderr"))
-        .wrap(Wrap { trim: false })
-        .style(Style::default().fg(Color::Red));
-
-    frame.render_widget(stdout_widget, logs_layout[0]);
-    frame.render_widget(stderr_widget, logs_layout[1]);
 }
 
 fn draw_tree(
