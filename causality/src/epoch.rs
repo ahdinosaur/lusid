@@ -27,8 +27,8 @@ pub fn compute_epochs<Node, NodeId>(
     tree: CausalityTree<Node, NodeId>,
 ) -> Result<Vec<Vec<Node>>, EpochError<NodeId>>
 where
-    Node: Clone,
-    NodeId: Clone + Eq + Hash,
+    Node: Debug + Clone,
+    NodeId: Debug + Clone + Eq + Hash,
 {
     #[derive(Debug)]
     struct CollectedLeaf<Node, NodeId> {
