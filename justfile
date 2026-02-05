@@ -21,7 +21,7 @@ lusid-dev-b-ssh:
   cargo run -p lusid --release -- dev ssh --config ./examples/lusid.toml --machine b
 
 lusid-apply-example-simple:
-  cargo run -p lusid-apply -- --root . --plan ./examples/simple.lusid --params '{ "whatever": true }' --log trace
+  cargo run -p lusid-apply --release -- --root . --plan ./examples/simple-debian.lusid --params '{ "whatever": true }' --log trace
 
 lusid-apply-example-multi:
-  cargo run -p lusid-apply -- --root . --plan ./examples/multi.lusid --log trace
+  cargo run -p lusid-apply --release -- --root . --plan ./examples/multi.lusid --log trace

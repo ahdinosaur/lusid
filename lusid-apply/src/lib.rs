@@ -163,7 +163,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
     emit(AppUpdate::ResourceChangesComplete { has_changes }).await?;
 
-    if has_changes {
+    if !has_changes {
         info!("No changes to apply!");
         return Ok(());
     };
