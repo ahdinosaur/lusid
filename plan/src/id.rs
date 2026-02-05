@@ -1,4 +1,5 @@
 use lusid_store::StoreItemId;
+use lusid_view::impl_display_render;
 use rimu::SourceId;
 use std::{
     fmt::Display,
@@ -88,3 +89,5 @@ impl Display for PlanNodeId {
         }
     }
 }
+
+impl_display_render!(PlanNodeId);

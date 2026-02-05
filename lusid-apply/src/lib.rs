@@ -4,7 +4,9 @@ use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{compute_epochs, CausalityTree, EpochError};
 use lusid_ctx::{Context, ContextError};
 use lusid_operation::{Operation, OperationApplyError};
-use lusid_plan::{self, map_plan_subitems, plan, render_plan_tree, PlanError, PlanId, PlanNodeId};
+use lusid_plan::{
+    self, map_plan_subitems, plan, render_plan_tree, PlanError, PlanId, PlanNodeId, PlanTree,
+};
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
@@ -101,7 +103,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     emit(AppUpdate::ResourcesStart).await?;
     let resources = resource_params
         .map_tree(
-            |node, meta| map_plan_subitems(node, meta, |node| node.resources()),
+            |node, meta| PlanTree::branch(meta, map_plan_subitems(node, |node| node.resources())),
             |index, tree| {
                 emit(AppUpdate::ResourcesNode {
                     index,
@@ -142,7 +144,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     // Get tree of resource changes
     emit(AppUpdate::ResourceChangesStart).await?;
     let resource_changes = resource_states
-        .map_option(
+        .map(
             |(resource, state)| resource.change(&state),
             |index, node| {
                 emit(AppUpdate::ResourceChangesNode {
@@ -156,12 +158,12 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         "Resource changes: {:?}",
         CausalityTree::from(resource_changes.clone())
     );
-    emit(AppUpdate::ResourceChangesComplete {
-        has_changes: !resource_changes.is_empty(),
-    })
-    .await?;
 
-    if resource_changes.is_empty() {
+    let has_changes = resource_changes.leaves().any(|node| node.is_some());
+
+    emit(AppUpdate::ResourceChangesComplete { has_changes }).await?;
+
+    if has_changes {
         info!("No changes to apply!");
         return Ok(());
     };
@@ -170,7 +172,14 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     emit(AppUpdate::OperationsStart).await?;
     let operations = resource_changes
         .map_tree(
-            |node, meta| map_plan_subitems(node, meta, |node| node.operations()),
+            |node, meta| match node {
+                Some(node) => {
+                    let children = map_plan_subitems(node, |node| node.operations())
+                        .map(|tree| tree.map(Some));
+                    PlanTree::branch(meta, children)
+                }
+                None => PlanTree::leaf(meta, None),
+            },
             |index, tree| {
                 emit(AppUpdate::OperationsNode {
                     index,
@@ -204,7 +213,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         );
         debug!("Operations: {operations:?}");
 
-        let operations = Operation::merge(operations);
+        let operations = Operation::merge(operations.into_iter().flatten());
         debug!("Merged operations: {operations:?}");
 
         for (operation_index, operation) in operations.iter().enumerate() {

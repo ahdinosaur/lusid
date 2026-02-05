@@ -10,43 +10,39 @@ pub type PlanMeta = CausalityMeta<PlanNodeId>;
 pub type PlanFlatTree<Node> = FlatTree<Node, PlanMeta>;
 pub type PlanFlatTreeNode<Node> = FlatTreeNode<Node, PlanMeta>;
 
-pub fn map_plan_subitems<Node, NextNode, MapFn>(
+pub fn map_plan_subitems<Node, NextNode, MapFn, MapFnIter>(
     node: Node,
-    meta: PlanMeta,
     map: MapFn,
-) -> PlanTree<NextNode>
+) -> impl Iterator<Item = PlanTree<NextNode>>
 where
-    MapFn: Fn(Node) -> Vec<Tree<NextNode, CausalityMeta<String>>>,
+    MapFn: Fn(Node) -> MapFnIter,
+    MapFnIter: IntoIterator<Item = Tree<NextNode, CausalityMeta<String>>>,
 {
     let scope_id = create_id();
-    let children = map(node)
-        .into_iter()
-        .map(|tree| {
-            tree.map_meta(|meta| CausalityMeta {
-                id: meta.id.map(|item_id| PlanNodeId::SubItem {
+    map(node).into_iter().map(move |tree| {
+        tree.map_meta(|meta| CausalityMeta {
+            id: meta.id.map(|item_id| PlanNodeId::SubItem {
+                scope_id: scope_id.clone(),
+                item_id,
+            }),
+            before: meta
+                .before
+                .into_iter()
+                .map(|item_id| PlanNodeId::SubItem {
                     scope_id: scope_id.clone(),
                     item_id,
-                }),
-                before: meta
-                    .before
-                    .into_iter()
-                    .map(|item_id| PlanNodeId::SubItem {
-                        scope_id: scope_id.clone(),
-                        item_id,
-                    })
-                    .collect(),
-                after: meta
-                    .after
-                    .into_iter()
-                    .map(|item_id| PlanNodeId::SubItem {
-                        scope_id: scope_id.clone(),
-                        item_id,
-                    })
-                    .collect(),
-            })
+                })
+                .collect(),
+            after: meta
+                .after
+                .into_iter()
+                .map(|item_id| PlanNodeId::SubItem {
+                    scope_id: scope_id.clone(),
+                    item_id,
+                })
+                .collect(),
         })
-        .collect();
-    Tree::Branch { meta, children }
+    })
 }
 
 pub fn render_plan_tree<Node>(tree: PlanTree<Node>) -> ViewTree

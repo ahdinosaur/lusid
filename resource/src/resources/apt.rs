@@ -7,6 +7,7 @@ use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_operation::{operations::apt::AptOperation, Operation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
 use serde::Deserialize;
 use thiserror::Error;
@@ -31,6 +32,8 @@ impl Display for AptParams {
     }
 }
 
+impl_display_render!(AptParams);
+
 #[derive(Debug, Clone)]
 pub struct AptResource {
     pub package: String,
@@ -42,6 +45,8 @@ impl Display for AptResource {
         write!(f, "Apt({package})")
     }
 }
+
+impl_display_render!(AptResource);
 
 #[derive(Debug, Clone)]
 pub enum AptState {
@@ -57,6 +62,8 @@ impl Display for AptState {
         }
     }
 }
+
+impl_display_render!(AptState);
 
 #[derive(Error, Debug)]
 pub enum AptStateError {
@@ -79,6 +86,8 @@ impl Display for AptChange {
         }
     }
 }
+
+impl_display_render!(AptChange);
 
 #[derive(Debug, Clone)]
 pub struct Apt;

@@ -31,6 +31,8 @@ where
     Node: Debug + Clone,
     NodeId: Debug + Clone + Eq + Hash,
 {
+    eprintln!("tree: {:?}", tree);
+
     #[derive(Debug)]
     struct CollectedLeaf<Node, NodeId> {
         node: Node,
@@ -149,7 +151,10 @@ where
     let mut indegree: Vec<usize> = vec![0; n];
 
     for (i, leaf) in leaves.iter().enumerate() {
+        eprintln!("leaf: {:?}", leaf);
         for id in &leaf.before {
+            eprintln!("id_to_leaves: {:?}", id_to_leaves);
+            eprintln!("id: {:?}", id);
             let Some(targets) = id_to_leaves.get(id) else {
                 return Err(EpochError::UnknownBeforeRef(id.clone()));
             };

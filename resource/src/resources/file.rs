@@ -10,6 +10,7 @@ use lusid_operation::{
     Operation,
 };
 use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
 use serde::Deserialize;
 use thiserror::Error;
@@ -60,6 +61,8 @@ impl Display for FileParams {
     }
 }
 
+impl_display_render!(FileParams);
+
 #[derive(Debug, Clone)]
 pub enum FileResource {
     FileSource { source: FilePath, path: FilePath },
@@ -88,6 +91,8 @@ impl Display for FileResource {
         }
     }
 }
+
+impl_display_render!(FileResource);
 
 #[derive(Debug, Clone)]
 pub enum FileState {
@@ -125,6 +130,8 @@ impl Display for FileState {
         write!(f, "{text}")
     }
 }
+
+impl_display_render!(FileState);
 
 #[derive(Error, Debug)]
 pub enum FileStateError {
@@ -191,6 +198,8 @@ impl Display for FileChange {
         }
     }
 }
+
+impl_display_render!(FileChange);
 
 #[derive(Debug, Clone)]
 pub struct File;

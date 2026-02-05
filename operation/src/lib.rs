@@ -53,7 +53,7 @@ pub enum Operation {
 
 impl Operation {
     /// Merge a set of operations by type.
-    pub fn merge(operations: Vec<Operation>) -> Vec<Operation> {
+    pub fn merge(operations: impl IntoIterator<Item = Operation>) -> Vec<Operation> {
         let OperationsByType { apt, pacman, file } = partition_by_type(operations);
 
         std::iter::empty()
@@ -199,6 +199,17 @@ impl Display for Operation {
     }
 }
 
+impl Render for Operation {
+    fn render(&self) -> lusid_view::View {
+        use Operation::*;
+        match self {
+            Apt(params) => params.render(),
+            File(params) => params.render(),
+            Pacman(params) => params.render(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct OperationsByType {
     apt: Vec<AptOperation>,
@@ -207,11 +218,11 @@ pub struct OperationsByType {
 }
 
 /// Merge a set of operations by type.
-fn partition_by_type(operations: Vec<Operation>) -> OperationsByType {
+fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> OperationsByType {
     let mut apt: Vec<AptOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
-    for operation in operations {
+    for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
             Operation::Pacman(op) => pacman.push(op),
