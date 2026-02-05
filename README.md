@@ -2,7 +2,9 @@
 
 _STATUS: MAD SCIENCE 🧪_
 
-> A functional config system for personal setups
+![frankenstein](https://github.com/user-attachments/assets/53b049ef-a256-4b41-9e01-240660fb0153)
+
+> Use declarative code to configure your living computer.
 
 ## About
 
