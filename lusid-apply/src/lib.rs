@@ -213,7 +213,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         );
         debug!("Operations: {operations:?}");
 
-        let operations = Operation::merge(operations.into_iter().flatten());
+        let operations = Operation::merge(operations);
         debug!("Merged operations: {operations:?}");
 
         for (operation_index, operation) in operations.iter().enumerate() {
