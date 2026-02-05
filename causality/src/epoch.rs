@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fmt::Debug,
     hash::Hash,
 };
 use thiserror::Error;
