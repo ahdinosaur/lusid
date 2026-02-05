@@ -29,12 +29,15 @@ pub enum Tree<Node, Meta> {
 }
 
 impl<Node, Meta> Tree<Node, Meta> {
-    pub fn branch(meta: Meta, children: Vec<Tree<Node, Meta>>) -> Self {
-        Self::Branch { children, meta }
+    pub fn branch(meta: Meta, children: impl IntoIterator<Item = Tree<Node, Meta>>) -> Self {
+        Self::Branch {
+            meta,
+            children: children.into_iter().collect(),
+        }
     }
 
     pub fn leaf(meta: Meta, node: Node) -> Self {
-        Self::Leaf { node, meta }
+        Self::Leaf { meta, node }
     }
 
     pub fn is_leaf(&self) -> bool {
@@ -106,6 +109,7 @@ pub struct FlatTree<Node, Meta> {
 pub enum FlatTreeError {
     #[error("node at index {0} is None")]
     NodeMissing(usize),
+
     #[error("index {0} is out of bounds")]
     IndexOutOfBounds(usize),
 }
@@ -124,8 +128,12 @@ where
         self.nodes.first()?.as_ref()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.root().is_none()
+    pub fn leaves(&self) -> impl Iterator<Item = &Node> {
+        self.nodes.iter().filter_map(|node| match node {
+            Some(FlatTreeNode::Branch { .. }) => None,
+            Some(FlatTreeNode::Leaf { node, .. }) => Some(node),
+            None => None,
+        })
     }
 
     pub fn get(&self, index: usize) -> Result<&FlatTreeNode<Node, Meta>, FlatTreeError> {
@@ -157,7 +165,7 @@ where
 
     /// Depth-first search from the root. Returns indices in post-order
     /// (children before parent). Missing or out-of-bounds children are skipped.
-    pub fn depth_first_search(&self) -> Vec<usize> {
+    fn depth_first_search(&self) -> Vec<usize> {
         let mut order = Vec::new();
         if self.root().is_none() {
             return order;

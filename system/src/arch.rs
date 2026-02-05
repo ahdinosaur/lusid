@@ -10,6 +10,18 @@ pub enum Arch {
     Aarch64,
 }
 
+impl Arch {
+    #[cfg(target_arch = "x86_64")]
+    pub fn get() -> Self {
+        Arch::X86_64
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn get() -> Self {
+        Arch::Aarch64
+    }
+}
+
 impl Display for Arch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -4,9 +4,12 @@ use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{compute_epochs, CausalityTree, EpochError};
 use lusid_ctx::{Context, ContextError};
 use lusid_operation::{Operation, OperationApplyError};
-use lusid_plan::{self, map_plan_subitems, plan, render_plan_tree, PlanError, PlanId, PlanNodeId};
+use lusid_plan::{
+    self, map_plan_subitems, plan, render_plan_tree, PlanError, PlanId, PlanNodeId, PlanTree,
+};
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_store::Store;
+use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
 use lusid_view::Render;
 use rimu::SourceId;
@@ -25,6 +28,9 @@ pub struct ApplyOptions {
 pub enum ApplyError {
     #[error(transparent)]
     Context(#[from] ContextError),
+
+    #[error("failed to get system: {0}")]
+    GetSystem(#[from] GetSystemError),
 
     #[error("failed to parse JSON parameters: {0}")]
     JsonParameters(#[source] serde_json::Error),
@@ -67,6 +73,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
     let mut ctx = Context::create(&root_path)?;
     let mut store = Store::new(ctx.paths().cache_dir());
+    let system = System::get().await?;
 
     info!(plan = %plan_id, "using plan");
 
@@ -84,7 +91,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     };
 
     // Parse/evaluate to tree of resource params.
-    let resource_params = plan(plan_id, param_values, &mut store).await?;
+    let resource_params = plan(plan_id, param_values, &mut store, &system).await?;
     debug!("Resource params: {resource_params:?}");
     emit(AppUpdate::ResourceParams {
         resource_params: render_plan_tree(resource_params.clone()),
@@ -96,7 +103,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     emit(AppUpdate::ResourcesStart).await?;
     let resources = resource_params
         .map_tree(
-            |node, meta| map_plan_subitems(node, meta, |node| node.resources()),
+            |node, meta| PlanTree::branch(meta, map_plan_subitems(node, |node| node.resources())),
             |index, tree| {
                 emit(AppUpdate::ResourcesNode {
                     index,
@@ -137,7 +144,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     // Get tree of resource changes
     emit(AppUpdate::ResourceChangesStart).await?;
     let resource_changes = resource_states
-        .map_option(
+        .map(
             |(resource, state)| resource.change(&state),
             |index, node| {
                 emit(AppUpdate::ResourceChangesNode {
@@ -151,12 +158,12 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         "Resource changes: {:?}",
         CausalityTree::from(resource_changes.clone())
     );
-    emit(AppUpdate::ResourceChangesComplete {
-        has_changes: !resource_changes.is_empty(),
-    })
-    .await?;
 
-    if resource_changes.is_empty() {
+    let has_changes = resource_changes.leaves().any(|node| node.is_some());
+
+    emit(AppUpdate::ResourceChangesComplete { has_changes }).await?;
+
+    if !has_changes {
         info!("No changes to apply!");
         return Ok(());
     };
@@ -165,7 +172,14 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     emit(AppUpdate::OperationsStart).await?;
     let operations = resource_changes
         .map_tree(
-            |node, meta| map_plan_subitems(node, meta, |node| node.operations()),
+            |node, meta| match node {
+                Some(node) => {
+                    let children = map_plan_subitems(node, |node| node.operations())
+                        .map(|tree| tree.map(Some));
+                    PlanTree::branch(meta, children)
+                }
+                None => PlanTree::leaf(meta, None),
+            },
             |index, tree| {
                 emit(AppUpdate::OperationsNode {
                     index,
@@ -205,12 +219,11 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         for (operation_index, operation) in operations.iter().enumerate() {
             let index = (epoch_index, operation_index);
 
-            emit(AppUpdate::OperationApplyStart { index }).await?;
-
             let (output, stdout, stderr) = operation.apply(&mut ctx).await?;
 
             let output_task = async {
                 output.await?;
+
                 Ok::<(), ApplyError>(())
             };
 
@@ -250,12 +263,16 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
                 }
             };
 
-            tokio::try_join!(output_task, stdout_task, stderr_task)?;
-
-            emit(AppUpdate::OperationApplyComplete {
-                index: (epoch_index, operation_index),
-            })
-            .await?;
+            if let Err(error) = tokio::try_join!(output_task, stdout_task, stderr_task) {
+                emit(AppUpdate::OperationApplyComplete {
+                    index,
+                    error: Some(error.to_string()),
+                })
+                .await?;
+                return Err(error);
+            } else {
+                emit(AppUpdate::OperationApplyComplete { index, error: None }).await?;
+            }
         }
     }
 

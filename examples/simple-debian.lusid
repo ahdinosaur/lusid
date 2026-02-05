@@ -5,7 +5,7 @@ params:
   whatever:
     type: "boolean"
 
-setup: (params) =>
+setup: (params, system) =>
   - module: "@core/apt"
     id: "install-nvim"
     params:
@@ -21,4 +21,4 @@ setup: (params) =>
     params:
       type: "source"
       source: "./hello.txt"
-      path: "/tmp/hello.txt"
+      path: system.user.home + "/hello.txt"

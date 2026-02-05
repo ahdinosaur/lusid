@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
+    fmt::Debug,
     hash::Hash,
 };
 use thiserror::Error;
@@ -24,15 +25,15 @@ pub enum EpochError<NodeId> {
 /// Compute dependency layers of resource specs (Kahn's algorithm).
 /// Returns a list of epochs (layers), each epoch is a Vec<Node>.
 pub fn compute_epochs<Node, NodeId>(
-    tree: CausalityTree<Node, NodeId>,
+    tree: CausalityTree<Option<Node>, NodeId>,
 ) -> Result<Vec<Vec<Node>>, EpochError<NodeId>>
 where
-    Node: Clone,
-    NodeId: Clone + Eq + Hash,
+    Node: Debug + Clone,
+    NodeId: Debug + Clone + Eq + Hash,
 {
     #[derive(Debug)]
     struct CollectedLeaf<Node, NodeId> {
-        node: Node,
+        node: Option<Node>,
         before: Vec<NodeId>,
         after: Vec<NodeId>,
     }
@@ -42,7 +43,7 @@ where
     let mut seen_ids: HashSet<NodeId> = HashSet::new();
 
     fn collect_recursive<Node, NodeId>(
-        tree: CausalityTree<Node, NodeId>,
+        tree: CausalityTree<Option<Node>, NodeId>,
         ancestor_before: &mut Vec<NodeId>,
         ancestor_after: &mut Vec<NodeId>,
         active_branch_ids: &mut Vec<NodeId>,
@@ -184,9 +185,13 @@ where
 
         let mut specs: Vec<Node> = Vec::new();
         for i in current_wave.iter().copied() {
-            specs.push(leaves[i].node.clone());
+            if let Some(node) = leaves[i].node.as_ref() {
+                specs.push(node.clone());
+            }
         }
-        epochs.push(specs);
+        if !specs.is_empty() {
+            epochs.push(specs);
+        }
 
         let mut next_wave: Vec<usize> = Vec::new();
         for i in current_wave {

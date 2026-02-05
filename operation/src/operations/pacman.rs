@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
+use lusid_view::impl_display_render;
 use std::{collections::BTreeSet, fmt::Display, pin::Pin};
 use thiserror::Error;
 use tokio::process::{ChildStderr, ChildStdout};
@@ -24,6 +25,8 @@ impl Display for PacmanOperation {
         }
     }
 }
+
+impl_display_render!(PacmanOperation);
 
 #[derive(Error, Debug)]
 pub enum PacmanApplyError {

@@ -1090,6 +1090,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "etc-os-release"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5bb34d25272a56dd40b5397182de049d19e8a2145313a606b7112e7f9343c51"
+dependencies = [
+ "indexmap",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2221,6 +2231,7 @@ dependencies = [
  "lusid-params",
  "lusid-resource",
  "lusid-store",
+ "lusid-system",
  "lusid-tree",
  "lusid-view",
  "rimu",
@@ -2284,9 +2295,12 @@ dependencies = [
 name = "lusid-system"
 version = "0.1.0"
 dependencies = [
+ "etc-os-release",
  "hostname",
  "serde",
  "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
 ]
 
 [[package]]

@@ -62,8 +62,10 @@ pub struct FlatViewTree {
 pub enum FlatViewTreeError {
     #[error("index {0} is out of bounds")]
     IndexOutOfBounds(usize),
+
     #[error("node at index {0} is None")]
     NodeMissing(usize),
+
     #[error("expected leaf at index {0}")]
     NotALeaf(usize),
 }
@@ -313,6 +315,7 @@ pub enum AppUpdate {
     },
     OperationApplyComplete {
         index: (usize, usize),
+        error: Option<String>,
     },
     OperationsApplyComplete,
 }
@@ -324,6 +327,7 @@ pub struct OperationView {
     pub stdout: String,
     pub stderr: String,
     pub is_complete: bool,
+    pub error: Option<String>,
 }
 
 impl OperationView {
@@ -333,6 +337,7 @@ impl OperationView {
             stdout: String::new(),
             stderr: String::new(),
             is_complete: false,
+            error: None,
         }
     }
 }
@@ -713,6 +718,7 @@ impl AppView {
                     .get_mut(o)
                     .ok_or(AppViewError::OperationIndexOutOfBounds(e, o))?;
                 op.stdout.push_str(&stdout);
+                op.stdout.push('\n');
                 Ok(AppView::OperationsApply {
                     resource_params,
                     resources,
@@ -745,6 +751,7 @@ impl AppView {
                     .get_mut(o)
                     .ok_or(AppViewError::OperationIndexOutOfBounds(e, o))?;
                 op.stderr.push_str(&stderr);
+                op.stdout.push('\n');
                 Ok(AppView::OperationsApply {
                     resource_params,
                     resources,
@@ -765,7 +772,10 @@ impl AppView {
                     operations_tree,
                     mut operations_epochs,
                 },
-                OperationApplyComplete { index: (e, o) },
+                OperationApplyComplete {
+                    index: (e, o),
+                    error,
+                },
             ) => {
                 let epoch = operations_epochs
                     .get_mut(e)
@@ -774,6 +784,7 @@ impl AppView {
                     .get_mut(o)
                     .ok_or(AppViewError::OperationIndexOutOfBounds(e, o))?;
                 op.is_complete = true;
+                op.error = error;
                 Ok(AppView::OperationsApply {
                     resource_params,
                     resources,

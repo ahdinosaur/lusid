@@ -81,6 +81,17 @@ impl Display for ResourceParams {
     }
 }
 
+impl Render for ResourceParams {
+    fn render(&self) -> lusid_view::View {
+        use ResourceParams::*;
+        match self {
+            Apt(params) => params.render(),
+            File(params) => params.render(),
+            Pacman(params) => params.render(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Resource {
     Apt(AptResource),
@@ -99,6 +110,17 @@ impl Display for Resource {
     }
 }
 
+impl Render for Resource {
+    fn render(&self) -> lusid_view::View {
+        use Resource::*;
+        match self {
+            Apt(params) => params.render(),
+            File(params) => params.render(),
+            Pacman(params) => params.render(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum ResourceState {
     Apt(AptState),
@@ -113,6 +135,17 @@ impl Display for ResourceState {
             Apt(apt) => apt.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+        }
+    }
+}
+
+impl Render for ResourceState {
+    fn render(&self) -> lusid_view::View {
+        use ResourceState::*;
+        match self {
+            Apt(params) => params.render(),
+            File(params) => params.render(),
+            Pacman(params) => params.render(),
         }
     }
 }
@@ -141,6 +174,17 @@ impl Display for ResourceChange {
             Apt(apt) => apt.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+        }
+    }
+}
+
+impl Render for ResourceChange {
+    fn render(&self) -> lusid_view::View {
+        use ResourceChange::*;
+        match self {
+            Apt(params) => params.render(),
+            File(params) => params.render(),
+            Pacman(params) => params.render(),
         }
     }
 }

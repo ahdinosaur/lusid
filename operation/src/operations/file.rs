@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
+use lusid_view::impl_display_render;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
@@ -189,6 +190,8 @@ impl Display for FileOperation {
         }
     }
 }
+
+impl_display_render!(FileOperation);
 
 #[derive(Debug, Clone)]
 pub struct File;
