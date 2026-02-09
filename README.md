@@ -69,12 +69,54 @@ When a plan is applied:
 
 - Given the inputs, the outputs should construct a tree.
   - The branches are user modules, the leaves are core states.
-- The core states are evaluated from user-facing params into a sub-tree of atomic resources (each atomic resource representing one thing on your computer).
+- The core states are evaluated from user-facing params into a sub-tree of atomic resources.
 - For each resource, find the current state of the resource on your computer, then compare with the desired state to determine a resource change.
 - Convert each resource change into a sub-tree of operations.
 - From the causality tree, find a minimal list of ordered epochs, where each epoch is a list of operations that can be applied together.
 - Merge all operations of the same type in the same epoch.
 - Iterate through each epoch in order, applying the operations.
+
+### Resource
+
+A resource represents the intended state of a thing on your computer, e.g. a package or a file or a service.
+
+Each resource type defines:
+
+- The user-facing parameters to describe such resources
+- How to evaluate user-facing params into atomic resources: each atomic resource representing one thing on your computer.
+- How to find the current state of the resource on your computer.
+- Given the current state and the desired state, what change should be applied?
+- How to apply the change as a set of operations.
+
+Resource types:
+
+- [x] [Apt](./resource/src/resources/apt.rs)
+    - [] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
+- [] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
+- [x] [File](./resource/src/resources/file.rs)
+- [] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
+- [] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
+- [] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
+- [x] [Pacman](./resource/src/resources/pacman.rs)
+- [] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
+- [] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
+
+### Operation
+
+An operation is an action you can apply to your computer, e.g. installing a package, writing a file, or reloading a service.
+
+Operation types:
+
+- [x] [Apt](./operation/src/operations/apt.rs)
+    - [] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
+- [] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
+- [x] [File](./operation/src/operations/file.rs)
+- [] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
+- [] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
+- [] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
+- [x] [Pacman](./operation/src/operations/pacman.rs)
+- [] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
+- [] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
 
 ## Roadmap
 
