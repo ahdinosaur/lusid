@@ -80,6 +80,19 @@ When a plan is applied:
 
 A resource represents the intended state of a thing on your computer, e.g. a package or a file or a service.
 
+Resource types:
+
+- [x] [Apt](./resource/src/resources/apt.rs)
+    - [ ] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
+- [ ] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
+- [x] [File](./resource/src/resources/file.rs)
+- [ ] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
+- [ ] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
+- [ ] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
+- [x] [Pacman](./resource/src/resources/pacman.rs)
+- [ ] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
+- [ ] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
+
 Each resource type defines:
 
 - The user-facing parameters to describe such resources
@@ -88,19 +101,6 @@ Each resource type defines:
 - Given the current state and the desired state, what change should be applied?
 - How to apply the change as a set of operations.
 
-Resource types:
-
-- [x] [Apt](./resource/src/resources/apt.rs)
-    - [] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
-- [] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
-- [x] [File](./resource/src/resources/file.rs)
-- [] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
-- [] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
-- [] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
-- [x] [Pacman](./resource/src/resources/pacman.rs)
-- [] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
-- [] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
-
 ### Operation
 
 An operation is an action you can apply to your computer, e.g. installing a package, writing a file, or reloading a service.
@@ -108,15 +108,20 @@ An operation is an action you can apply to your computer, e.g. installing a pack
 Operation types:
 
 - [x] [Apt](./operation/src/operations/apt.rs)
-    - [] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
-- [] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
+    - [ ] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
+- [ ] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
 - [x] [File](./operation/src/operations/file.rs)
-- [] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
-- [] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
-- [] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
+- [ ] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
+- [ ] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
+- [ ] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
 - [x] [Pacman](./operation/src/operations/pacman.rs)
-- [] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
-- [] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
+- [ ] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
+- [ ] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
+
+Each operation type defines:
+
+- How to merge multiple operations of the same type
+- How to apply an operation
 
 ## Roadmap
 
