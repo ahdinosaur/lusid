@@ -82,7 +82,7 @@ pub enum PacmanChange {
 impl Display for PacmanChange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PacmanChange::Install { package } => write!(f, "Pacman::Installed({package})"),
+            PacmanChange::Install { package } => write!(f, "Pacman::Install({package})"),
         }
     }
 }

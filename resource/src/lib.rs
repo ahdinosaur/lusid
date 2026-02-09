@@ -16,6 +16,9 @@ use thiserror::Error;
 mod resources;
 
 use crate::resources::apt::{Apt, AptChange, AptParams, AptResource, AptState};
+use crate::resources::command::{
+    Command, CommandChange, CommandParams, CommandResource, CommandState,
+};
 use crate::resources::file::{File, FileChange, FileResource, FileState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 
@@ -68,6 +71,7 @@ pub enum ResourceParams {
     Apt(AptParams),
     File(FileParams),
     Pacman(PacmanParams),
+    Command(CommandParams),
 }
 
 impl Display for ResourceParams {
@@ -77,6 +81,7 @@ impl Display for ResourceParams {
             Apt(params) => params.fmt(f),
             File(params) => params.fmt(f),
             Pacman(params) => params.fmt(f),
+            Command(params) => params.fmt(f),
         }
     }
 }
@@ -88,6 +93,7 @@ impl Render for ResourceParams {
             Apt(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Command(params) => params.render(),
         }
     }
 }
@@ -97,6 +103,7 @@ pub enum Resource {
     Apt(AptResource),
     File(FileResource),
     Pacman(PacmanResource),
+    Command(CommandResource),
 }
 
 impl Display for Resource {
@@ -106,6 +113,7 @@ impl Display for Resource {
             Apt(apt) => apt.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+            Command(command) => command.fmt(f),
         }
     }
 }
@@ -117,6 +125,7 @@ impl Render for Resource {
             Apt(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Command(params) => params.render(),
         }
     }
 }
@@ -126,6 +135,7 @@ pub enum ResourceState {
     Apt(AptState),
     File(FileState),
     Pacman(PacmanState),
+    Command(CommandState),
 }
 
 impl Display for ResourceState {
@@ -135,6 +145,7 @@ impl Display for ResourceState {
             Apt(apt) => apt.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+            Command(command) => command.fmt(f),
         }
     }
 }
@@ -146,6 +157,7 @@ impl Render for ResourceState {
             Apt(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Command(params) => params.render(),
         }
     }
 }
@@ -158,6 +170,8 @@ pub enum ResourceStateError {
     File(#[from] <File as ResourceType>::StateError),
     #[error("pacman state error: {0}")]
     Pacman(#[from] <Pacman as ResourceType>::StateError),
+    #[error("command state error: {0}")]
+    Command(#[from] <Command as ResourceType>::StateError),
 }
 
 #[derive(Debug, Clone)]
@@ -165,6 +179,7 @@ pub enum ResourceChange {
     Apt(AptChange),
     File(FileChange),
     Pacman(PacmanChange),
+    Command(CommandChange),
 }
 
 impl Display for ResourceChange {
@@ -174,6 +189,7 @@ impl Display for ResourceChange {
             Apt(apt) => apt.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+            Command(command) => command.fmt(f),
         }
     }
 }
@@ -185,6 +201,7 @@ impl Render for ResourceChange {
             Apt(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Command(params) => params.render(),
         }
     }
 }
@@ -205,6 +222,7 @@ impl ResourceParams {
             ResourceParams::Apt(params) => typed::<Apt>(params, Resource::Apt),
             ResourceParams::File(params) => typed::<File>(params, Resource::File),
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
+            ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
         }
     }
 }
@@ -236,6 +254,15 @@ impl Resource {
                 )
                 .await
             }
+            Resource::Command(resource) => {
+                typed::<Command>(
+                    ctx,
+                    resource,
+                    ResourceState::Command,
+                    ResourceStateError::Command,
+                )
+                .await
+            }
         }
     }
 
@@ -260,6 +287,9 @@ impl Resource {
             (Resource::Pacman(resource), ResourceState::Pacman(state)) => {
                 typed::<Pacman>(resource, state, ResourceChange::Pacman)
             }
+            (Resource::Command(resource), ResourceState::Command(state)) => {
+                typed::<Command>(resource, state, ResourceChange::Command)
+            }
             _ => {
                 // Programmer error, should never happen, or if it does should be immediately obvious.
                 panic!("Unmatched resource and state")
@@ -274,6 +304,7 @@ impl ResourceChange {
             ResourceChange::Apt(change) => Apt::operations(change),
             ResourceChange::File(change) => File::operations(change),
             ResourceChange::Pacman(change) => Pacman::operations(change),
+            ResourceChange::Command(change) => Command::operations(change),
         }
     }
 }
