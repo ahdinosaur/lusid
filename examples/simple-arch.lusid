@@ -12,7 +12,7 @@ setup: (params) =>
       packages: ["neovim"]
 
   - module: "@core/pacman"
-    before:
+    requires:
       - "install-nvim"
     params:
       package: "curl"

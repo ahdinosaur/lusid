@@ -277,7 +277,7 @@ impl ResourceType for File {
 
                 if let Some(mode) = mode {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["file".into()]),
+                        CausalityMeta::requires(vec!["file".into()]),
                         FileResource::Mode {
                             path: path.clone(),
                             mode,
@@ -287,7 +287,7 @@ impl ResourceType for File {
 
                 if let Some(user) = user {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["file".into()]),
+                        CausalityMeta::requires(vec!["file".into()]),
                         FileResource::User {
                             path: path.clone(),
                             user,
@@ -297,7 +297,7 @@ impl ResourceType for File {
 
                 if let Some(group) = group {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["file".into()]),
+                        CausalityMeta::requires(vec!["file".into()]),
                         FileResource::Group { path, group },
                     ));
                 }
@@ -318,7 +318,7 @@ impl ResourceType for File {
 
                 if let Some(mode) = mode {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["file".into()]),
+                        CausalityMeta::requires(vec!["file".into()]),
                         FileResource::Mode {
                             path: path.clone(),
                             mode,
@@ -328,7 +328,7 @@ impl ResourceType for File {
 
                 if let Some(user) = user {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["file".into()]),
+                        CausalityMeta::requires(vec!["file".into()]),
                         FileResource::User {
                             path: path.clone(),
                             user,
@@ -338,7 +338,7 @@ impl ResourceType for File {
 
                 if let Some(group) = group {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["file".into()]),
+                        CausalityMeta::requires(vec!["file".into()]),
                         FileResource::Group { path, group },
                     ));
                 }
@@ -364,7 +364,7 @@ impl ResourceType for File {
 
                 if let Some(mode) = mode {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["directory".into()]),
+                        CausalityMeta::requires(vec!["directory".into()]),
                         FileResource::Mode {
                             path: path.clone(),
                             mode,
@@ -374,7 +374,7 @@ impl ResourceType for File {
 
                 if let Some(user) = user {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["directory".into()]),
+                        CausalityMeta::requires(vec!["directory".into()]),
                         FileResource::User {
                             path: path.clone(),
                             user,
@@ -384,7 +384,7 @@ impl ResourceType for File {
 
                 if let Some(group) = group {
                     nodes.push(CausalityTree::leaf(
-                        CausalityMeta::before(vec!["directory".into()]),
+                        CausalityMeta::requires(vec!["directory".into()]),
                         FileResource::Group { path, group },
                     ));
                 }

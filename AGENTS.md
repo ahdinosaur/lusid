@@ -11,7 +11,7 @@
    - **Core modules** (`@core/*`) → become typed `ResourceParams` (apt/file/pacman today)
    - Or nested plans (module path) → recursively planned
 3. Validates parameter schemas and values (with good span/source error reporting).
-4. Builds a **causality tree** (nodes can have `id`, `before`, `after` dependencies).
+4. Builds a **causality tree** (nodes can have `id`, `requires`, `required_by` dependencies).
 5. Computes dependency **epochs** (topological layers).
 6. Applies operations epoch-by-epoch, streaming structured UI updates as JSON to stdout.
 7. The `lusid` CLI runs `lusid-apply-*` and renders a TUI from those updates.
@@ -20,7 +20,7 @@ Key design themes:
 - Strong typing at the boundaries (params → typed structs).
 - Span-aware diagnostics using Rimu `Spanned<T>` values.
 - Tree-first architecture: nested `Tree` and arena-based `FlatTree`.
-- Dependency ordering via `CausalityMeta { id, before, after }` and Kahn’s algorithm.
+- Dependency ordering via `CausalityMeta { id, requires, required_by }` and Kahn’s algorithm.
 
 ## Workspace map (high level)
 

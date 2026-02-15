@@ -197,7 +197,7 @@ impl ResourceType for Apt {
                         node: Operation::Apt(AptOperation::Install {
                             packages: vec![package],
                         }),
-                        meta: CausalityMeta::before(vec!["update".into()]),
+                        meta: CausalityMeta::requires(vec!["update".into()]),
                     },
                 ]
             }

@@ -12,11 +12,11 @@ pub enum EpochError<NodeId> {
     #[error("Duplicate id: {0}")]
     DuplicateId(NodeId),
 
-    #[error("Unknown id referenced in 'before': {0}")]
-    UnknownBeforeRef(NodeId),
+    #[error("Unknown id referenced in 'requires': {0}")]
+    UnknownRequiresRef(NodeId),
 
-    #[error("Unknown id referenced in 'after': {0}")]
-    UnknownAfterRef(NodeId),
+    #[error("Unknown id referenced in 'required_by': {0}")]
+    UnknownRequiredByRef(NodeId),
 
     #[error("Cycle detected in dependency graph (remaining nodes: {remaining})")]
     CycleDetected { remaining: usize },
@@ -34,8 +34,8 @@ where
     #[derive(Debug)]
     struct CollectedLeaf<Node, NodeId> {
         node: Option<Node>,
-        before: Vec<NodeId>,
-        after: Vec<NodeId>,
+        requires: Vec<NodeId>,
+        required_by: Vec<NodeId>,
     }
 
     let mut leaves: Vec<CollectedLeaf<Node, NodeId>> = Vec::new();
@@ -44,8 +44,8 @@ where
 
     fn collect_recursive<Node, NodeId>(
         tree: CausalityTree<Option<Node>, NodeId>,
-        ancestor_before: &mut Vec<NodeId>,
-        ancestor_after: &mut Vec<NodeId>,
+        ancestor_requires: &mut Vec<NodeId>,
+        ancestor_required_by: &mut Vec<NodeId>,
         active_branch_ids: &mut Vec<NodeId>,
         seen_ids: &mut HashSet<NodeId>,
         id_to_leaves: &mut HashMap<NodeId, Vec<usize>>,
@@ -56,13 +56,17 @@ where
     {
         match tree {
             CausalityTree::Branch { children, meta } => {
-                let CausalityMeta { id, before, after } = meta;
+                let CausalityMeta {
+                    id,
+                    requires,
+                    required_by,
+                } = meta;
 
-                let before_len = ancestor_before.len();
-                ancestor_before.extend(before);
+                let requires_len = ancestor_requires.len();
+                ancestor_requires.extend(requires);
 
-                let after_len = ancestor_after.len();
-                ancestor_after.extend(after);
+                let required_by_len = ancestor_required_by.len();
+                ancestor_required_by.extend(required_by);
 
                 let pushed_branch_id = if let Some(branch_id) = id {
                     if !seen_ids.insert(branch_id.clone()) {
@@ -78,8 +82,8 @@ where
                 for child in children {
                     collect_recursive(
                         child,
-                        ancestor_before,
-                        ancestor_after,
+                        ancestor_requires,
+                        ancestor_required_by,
                         active_branch_ids,
                         seen_ids,
                         id_to_leaves,
@@ -87,29 +91,33 @@ where
                     )?;
                 }
 
-                ancestor_before.truncate(before_len);
-                ancestor_after.truncate(after_len);
+                ancestor_requires.truncate(requires_len);
+                ancestor_required_by.truncate(required_by_len);
                 if pushed_branch_id {
                     active_branch_ids.pop();
                 }
                 Ok(())
             }
             CausalityTree::Leaf { node, meta } => {
-                let CausalityMeta { id, before, after } = meta;
+                let CausalityMeta {
+                    id,
+                    requires,
+                    required_by,
+                } = meta;
 
-                let mut effective_before: Vec<NodeId> = Vec::new();
-                effective_before.extend(ancestor_before.iter().cloned());
-                effective_before.extend(before);
+                let mut effective_requires: Vec<NodeId> = Vec::new();
+                effective_requires.extend(ancestor_requires.iter().cloned());
+                effective_requires.extend(requires);
 
-                let mut effective_after: Vec<NodeId> = Vec::new();
-                effective_after.extend(ancestor_after.iter().cloned());
-                effective_after.extend(after);
+                let mut effective_required_by: Vec<NodeId> = Vec::new();
+                effective_required_by.extend(ancestor_required_by.iter().cloned());
+                effective_required_by.extend(required_by);
 
                 let index = leaves.len();
                 leaves.push(CollectedLeaf {
                     node,
-                    before: effective_before,
-                    after: effective_after,
+                    requires: effective_requires,
+                    required_by: effective_required_by,
                 });
 
                 for branch_id in active_branch_ids.iter() {
@@ -129,14 +137,14 @@ where
         }
     }
 
-    let mut ancestor_before: Vec<NodeId> = Vec::new();
-    let mut ancestor_after: Vec<NodeId> = Vec::new();
+    let mut ancestor_requires: Vec<NodeId> = Vec::new();
+    let mut ancestor_required_by: Vec<NodeId> = Vec::new();
     let mut active_branch_ids: Vec<NodeId> = Vec::new();
 
     collect_recursive(
         tree,
-        &mut ancestor_before,
-        &mut ancestor_after,
+        &mut ancestor_requires,
+        &mut ancestor_required_by,
         &mut active_branch_ids,
         &mut seen_ids,
         &mut id_to_leaves,
@@ -149,18 +157,18 @@ where
     let mut indegree: Vec<usize> = vec![0; n];
 
     for (i, leaf) in leaves.iter().enumerate() {
-        for id in &leaf.before {
+        for id in &leaf.requires {
             let Some(targets) = id_to_leaves.get(id) else {
-                return Err(EpochError::UnknownBeforeRef(id.clone()));
+                return Err(EpochError::UnknownRequiresRef(id.clone()));
             };
             for &j in targets {
                 outgoing[j].push(i);
                 indegree[i] += 1;
             }
         }
-        for id in &leaf.after {
+        for id in &leaf.required_by {
             let Some(targets) = id_to_leaves.get(id) else {
-                return Err(EpochError::UnknownAfterRef(id.clone()));
+                return Err(EpochError::UnknownRequiredByRef(id.clone()));
             };
             for &j in targets {
                 outgoing[i].push(j);

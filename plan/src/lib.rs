@@ -136,15 +136,15 @@ async fn plan_item_to_resource(
         id: item_id,
         ref module,
         params: params_value,
-        before,
-        after,
+        requires,
+        required_by,
     } = plan_item;
 
     let id = item_id.map(|id| PlanNodeId::PlanItem {
         plan_id: current_plan_id.clone(),
         item_id: id.into_inner(),
     });
-    let before = before
+    let requires = requires
         .into_iter()
         .map(|v| v.into_inner())
         .map(|item_id| PlanNodeId::PlanItem {
@@ -152,7 +152,7 @@ async fn plan_item_to_resource(
             item_id,
         })
         .collect();
-    let after = after
+    let required_by = required_by
         .into_iter()
         .map(|v| v.into_inner())
         .map(|item_id| PlanNodeId::PlanItem {
@@ -164,7 +164,11 @@ async fn plan_item_to_resource(
     if let Some(core_module_id) = is_core_module(module) {
         let params = core_module(core_module_id, params_value)?;
         Ok(PlanTree::Leaf {
-            meta: PlanMeta { id, before, after },
+            meta: PlanMeta {
+                id,
+                requires,
+                required_by,
+            },
             node: params,
         })
     } else {
@@ -174,7 +178,11 @@ async fn plan_item_to_resource(
             .await
             .map_err(Box::new)?;
         Ok(PlanTree::Branch {
-            meta: PlanMeta { id, before, after },
+            meta: PlanMeta {
+                id,
+                requires,
+                required_by,
+            },
             children,
         })
     }
