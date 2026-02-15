@@ -25,16 +25,16 @@ where
                 scope_id: scope_id.clone(),
                 item_id,
             }),
-            before: meta
-                .before
+            requires: meta
+                .requires
                 .into_iter()
                 .map(|item_id| PlanNodeId::SubItem {
                     scope_id: scope_id.clone(),
                     item_id,
                 })
                 .collect(),
-            after: meta
-                .after
+            required_by: meta
+                .required_by
                 .into_iter()
                 .map(|item_id| PlanNodeId::SubItem {
                     scope_id: scope_id.clone(),

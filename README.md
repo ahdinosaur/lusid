@@ -63,7 +63,7 @@ A plan:
 - Defines a `setup` function, which return a list of items to apply.
   - An item can refer to another plan defined by the user, in which case they are called.
   - Or, an item can a core states, these are defined in Rust and called like any other plan.
-- Items can be dependent: there is a way to say this happens _before_ or _after_ this.
+- Items can be dependent: there is a way to say this _requires_ or is _required_by_ another item.
 
 When a plan is applied:
 

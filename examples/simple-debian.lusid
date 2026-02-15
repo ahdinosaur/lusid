@@ -12,7 +12,7 @@ setup: (params, system) =>
       packages: ["neovim"]
 
   - module: "@core/apt"
-    before:
+    requires:
       - "install-nvim"
     params:
       package: "curl"

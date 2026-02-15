@@ -54,8 +54,8 @@ pub struct PlanItem {
     pub id: Option<Spanned<String>>,
     pub module: Spanned<String>,
     pub params: Option<Spanned<Value>>,
-    pub before: Vec<Spanned<String>>,
-    pub after: Vec<Spanned<String>>,
+    pub requires: Vec<Spanned<String>>,
+    pub required_by: Vec<Spanned<String>>,
 }
 
 #[derive(Debug, Clone, Error, Display)]
@@ -68,14 +68,14 @@ pub enum IntoPlanItemError {
     ModuleNotAString { span: Span },
     /// Property "id" must be a string
     IdNotAString { span: Span },
-    /// Property "before" must be a list
-    BeforeNotAList { span: Span },
-    /// "before" list item must be a string
-    BeforeItemNotAString { item_span: Span },
-    /// Property "after" must be a list
-    AfterNotAList { span: Span },
-    /// "after" list item must be a string
-    AfterItemNotAString { item_span: Span },
+    /// Property "requires" must be a list
+    RequiresNotAList { span: Span },
+    /// "requires" list item must be a string
+    RequiresItemNotAString { item_span: Span },
+    /// Property "required_by" must be a list
+    RequiredByNotAList { span: Span },
+    /// "required_by" list item must be a string
+    RequiredByItemNotAString { item_span: Span },
 }
 
 impl FromRimu for PlanItem {
@@ -112,7 +112,7 @@ impl FromRimu for PlanItem {
 
         let params = object.swap_remove("params");
 
-        let before = match object.swap_remove("before") {
+        let requires = match object.swap_remove("requires") {
             None => Vec::new(),
             Some(value) => {
                 let (value, span) = value.clone().take();
@@ -124,7 +124,7 @@ impl FromRimu for PlanItem {
                             match item_value {
                                 Value::String(s) => out.push(Spanned::new(s, item_span)),
                                 _ => {
-                                    return Err(IntoPlanItemError::BeforeItemNotAString {
+                                    return Err(IntoPlanItemError::RequiresItemNotAString {
                                         item_span,
                                     });
                                 }
@@ -132,12 +132,12 @@ impl FromRimu for PlanItem {
                         }
                         out
                     }
-                    _ => return Err(IntoPlanItemError::BeforeNotAList { span }),
+                    _ => return Err(IntoPlanItemError::RequiresNotAList { span }),
                 }
             }
         };
 
-        let after = match object.swap_remove("after") {
+        let required_by = match object.swap_remove("required_by") {
             None => Vec::new(),
             Some(value) => {
                 let (value, span) = value.clone().take();
@@ -149,7 +149,7 @@ impl FromRimu for PlanItem {
                             match item_value {
                                 Value::String(s) => out.push(Spanned::new(s, item_span)),
                                 _ => {
-                                    return Err(IntoPlanItemError::AfterItemNotAString {
+                                    return Err(IntoPlanItemError::RequiredByItemNotAString {
                                         item_span,
                                     });
                                 }
@@ -157,7 +157,7 @@ impl FromRimu for PlanItem {
                         }
                         out
                     }
-                    _ => return Err(IntoPlanItemError::AfterNotAList { span }),
+                    _ => return Err(IntoPlanItemError::RequiredByNotAList { span }),
                 }
             }
         };
@@ -166,8 +166,8 @@ impl FromRimu for PlanItem {
             id,
             module,
             params,
-            before,
-            after,
+            requires,
+            required_by,
         })
     }
 }

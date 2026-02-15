@@ -188,7 +188,7 @@ impl ResourceType for Pacman {
                         node: Operation::Pacman(PacmanOperation::Install {
                             packages: vec![package],
                         }),
-                        meta: CausalityMeta::before(vec!["upgrade".into()]),
+                        meta: CausalityMeta::requires(vec!["upgrade".into()]),
                     },
                 ]
             }
