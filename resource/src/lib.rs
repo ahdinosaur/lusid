@@ -20,8 +20,8 @@ use crate::resources::command::{
     Command, CommandChange, CommandParams, CommandResource, CommandState,
 };
 use crate::resources::file::{File, FileChange, FileResource, FileState};
-use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
+use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 
 /// ResourceType:
 /// - ParamTypes for Rimu schema

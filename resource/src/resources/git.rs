@@ -7,8 +7,8 @@ use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_operation::{
-    operations::{file::FilePath, git::GitOperation},
     Operation,
+    operations::{file::FilePath, git::GitOperation},
 };
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;

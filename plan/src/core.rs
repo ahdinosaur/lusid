@@ -1,6 +1,6 @@
-use lusid_params::{validate, ParamValues};
+use lusid_params::{ParamValues, validate};
 use lusid_resource::{
-    apt::Apt, command::Command, file::File, git::Git, pacman::Pacman, ResourceParams, ResourceType,
+    ResourceParams, ResourceType, apt::Apt, command::Command, file::File, git::Git, pacman::Pacman,
 };
 use rimu::{Spanned, Value};
 
