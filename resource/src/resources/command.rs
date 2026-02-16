@@ -5,7 +5,10 @@ use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command as RunCommand, CommandError as RunCommandError};
 use lusid_ctx::Context;
-use lusid_operation::{operations::command::CommandOperation, Operation};
+use lusid_operation::{
+    operations::command::{CommandExecutor, CommandOperation},
+    Operation,
+};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
@@ -272,7 +275,10 @@ impl ResourceType for Command {
             CommandChange::Install { command } | CommandChange::Uninstall { command } => {
                 vec![CausalityTree::leaf(
                     CausalityMeta::default(),
-                    Operation::Command(CommandOperation { command }),
+                    Operation::Command(CommandOperation {
+                        command,
+                        executor: CommandExecutor::Shell,
+                    }),
                 )]
             }
         }

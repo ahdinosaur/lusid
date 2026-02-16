@@ -291,6 +291,15 @@ impl FromStr for Command {
     }
 }
 
+impl Command {
+    pub fn new_sh(command: &str) -> Self {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c");
+        cmd.arg(command);
+        cmd
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

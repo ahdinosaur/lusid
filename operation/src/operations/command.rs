@@ -10,13 +10,20 @@ use tracing::info;
 use crate::OperationType;
 
 #[derive(Debug, Clone)]
+pub enum CommandExecutor {
+    Direct,
+    Shell,
+}
+
+#[derive(Debug, Clone)]
 pub struct CommandOperation {
     pub command: String,
+    pub executor: CommandExecutor,
 }
 
 impl Display for CommandOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let CommandOperation { command } = self;
+        let CommandOperation { command, .. } = self;
         write!(f, "Command({command})")
     }
 }
@@ -52,10 +59,15 @@ impl OperationType for Command {
         _ctx: &mut Context,
         operation: &Self::Operation,
     ) -> Result<(Self::ApplyOutput, Self::ApplyStdout, Self::ApplyStderr), Self::ApplyError> {
-        let CommandOperation { command } = operation;
+        let CommandOperation { command, executor } = operation;
         info!("[command] run: {command}");
 
-        let mut cmd = RunCommand::from_str(command).map_err(CommandApplyError::ParseCommand)?;
+        let mut cmd = match executor {
+            CommandExecutor::Direct => {
+                RunCommand::from_str(command).map_err(CommandApplyError::ParseCommand)
+            }
+            CommandExecutor::Shell => Ok(RunCommand::new_sh(command)),
+        }?;
         let output = cmd.output().await?;
         Ok((
             Box::pin(async move {
