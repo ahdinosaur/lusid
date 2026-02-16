@@ -1,6 +1,6 @@
-use lusid_params::{ParamValues, validate};
+use lusid_params::{validate, ParamValues};
 use lusid_resource::{
-    ResourceParams, ResourceType, apt::Apt, command::Command, file::File, pacman::Pacman,
+    apt::Apt, command::Command, file::File, git::Git, pacman::Pacman, ResourceParams, ResourceType,
 };
 use rimu::{Spanned, Value};
 
@@ -19,6 +19,7 @@ pub fn core_module(
         File::ID => core_module_for_resource::<File>(params).map(ResourceParams::File),
         Pacman::ID => core_module_for_resource::<Pacman>(params).map(ResourceParams::Pacman),
         Command::ID => core_module_for_resource::<Command>(params).map(ResourceParams::Command),
+        Git::ID => core_module_for_resource::<Git>(params).map(ResourceParams::Git),
         other => Err(PlanItemToResourceError::UnsupportedCoreModuleId {
             id: other.to_string(),
         }),

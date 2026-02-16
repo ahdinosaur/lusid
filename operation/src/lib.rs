@@ -18,6 +18,7 @@ use crate::operations::{
     apt::{Apt, AptOperation},
     command::{Command, CommandOperation},
     file::{File, FileOperation},
+    git::{Git, GitOperation},
     pacman::{Pacman, PacmanOperation},
 };
 
@@ -51,6 +52,7 @@ pub enum Operation {
     Pacman(PacmanOperation),
     File(FileOperation),
     Command(CommandOperation),
+    Git(GitOperation),
 }
 
 impl Operation {
@@ -61,6 +63,7 @@ impl Operation {
             pacman,
             file,
             command,
+            git,
         } = partition_by_type(operations);
 
         std::iter::empty()
@@ -68,6 +71,7 @@ impl Operation {
             .chain(Pacman::merge(pacman).into_iter().map(Operation::Pacman))
             .chain(File::merge(file).into_iter().map(Operation::File))
             .chain(Command::merge(command).into_iter().map(Operation::Command))
+            .chain(Git::merge(git).into_iter().map(Operation::Git))
             .collect()
     }
 }
@@ -85,6 +89,9 @@ pub enum OperationApplyError {
 
     #[error("command operation failed: {0:?}")]
     Command(<Command as OperationType>::ApplyError),
+
+    #[error("git operation failed: {0:?}")]
+    Git(<Git as OperationType>::ApplyError),
 }
 
 #[pin_project(project = OperationApplyOutputProject)]
@@ -93,6 +100,7 @@ pub enum OperationApplyOutput {
     Pacman(#[pin] <Pacman as OperationType>::ApplyOutput),
     File(#[pin] <File as OperationType>::ApplyOutput),
     Command(#[pin] <Command as OperationType>::ApplyOutput),
+    Git(#[pin] <Git as OperationType>::ApplyOutput),
 }
 
 impl Future for OperationApplyOutput {
@@ -105,6 +113,7 @@ impl Future for OperationApplyOutput {
             Pacman(fut) => fut.poll(cx).map_err(OperationApplyError::Pacman),
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
             Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
+            Git(fut) => fut.poll(cx).map_err(OperationApplyError::Git),
         }
     }
 }
@@ -115,6 +124,7 @@ pub enum OperationApplyStdout {
     Pacman(#[pin] <Pacman as OperationType>::ApplyStdout),
     File(#[pin] <File as OperationType>::ApplyStdout),
     Command(#[pin] <Command as OperationType>::ApplyStdout),
+    Git(#[pin] <Git as OperationType>::ApplyStdout),
 }
 
 impl AsyncRead for OperationApplyStdout {
@@ -129,6 +139,7 @@ impl AsyncRead for OperationApplyStdout {
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
+            Git(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -139,6 +150,7 @@ pub enum OperationApplyStderr {
     Pacman(#[pin] <Pacman as OperationType>::ApplyStderr),
     File(#[pin] <File as OperationType>::ApplyStderr),
     Command(#[pin] <Command as OperationType>::ApplyStderr),
+    Git(#[pin] <Git as OperationType>::ApplyStderr),
 }
 
 impl AsyncRead for OperationApplyStderr {
@@ -153,6 +165,7 @@ impl AsyncRead for OperationApplyStderr {
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
+            Git(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -211,6 +224,16 @@ impl Operation {
                     OperationApplyStderr::Command(stderr),
                 ))
             }
+            Operation::Git(op) => {
+                let (output, stdout, stderr) = Git::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::Git)?;
+                Ok((
+                    OperationApplyOutput::Git(output),
+                    OperationApplyStdout::Git(stdout),
+                    OperationApplyStderr::Git(stderr),
+                ))
+            }
         }
     }
 }
@@ -223,6 +246,7 @@ impl Display for Operation {
             Pacman(op) => Display::fmt(op, f),
             File(op) => Display::fmt(op, f),
             Command(op) => Display::fmt(op, f),
+            Git(op) => Display::fmt(op, f),
         }
     }
 }
@@ -235,6 +259,7 @@ impl Render for Operation {
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
+            Git(params) => params.render(),
         }
     }
 }
@@ -245,6 +270,7 @@ pub struct OperationsByType {
     pacman: Vec<PacmanOperation>,
     file: Vec<FileOperation>,
     command: Vec<CommandOperation>,
+    git: Vec<GitOperation>,
 }
 
 /// Merge a set of operations by type.
@@ -253,12 +279,14 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     let mut pacman: Vec<PacmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
     let mut command: Vec<CommandOperation> = Vec::new();
+    let mut git: Vec<GitOperation> = Vec::new();
     for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
             Operation::Pacman(op) => pacman.push(op),
             Operation::File(op) => file.push(op),
             Operation::Command(op) => command.push(op),
+            Operation::Git(op) => git.push(op),
         }
     }
     OperationsByType {
@@ -266,5 +294,6 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
         pacman,
         file,
         command,
+        git,
     }
 }
