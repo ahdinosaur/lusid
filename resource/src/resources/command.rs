@@ -6,8 +6,8 @@ use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command as RunCommand, CommandError as RunCommandError};
 use lusid_ctx::Context;
 use lusid_operation::{
-    operations::command::{CommandExecutor, CommandOperation},
     Operation,
+    operations::command::{CommandExecutor, CommandOperation},
 };
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
