@@ -26,5 +26,5 @@ setup: (params, system) =>
   - module: "@core/command"
     params:
       status: "install"
-      install: "sudo apt-get install -y ripgrep"
-      is-installed: "command -v rg"
+      install: "curl -LO https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep_15.1.0-1_amd64.deb && sudo dpkg -i ripgrep_15.1.0-1_amd64.deb && rm ripgrep_15.1.0-1_amd64.deb"
+      is_installed: "which rg"

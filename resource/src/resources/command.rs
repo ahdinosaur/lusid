@@ -5,7 +5,7 @@ use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command as RunCommand, CommandError as RunCommandError};
 use lusid_ctx::Context;
-use lusid_operation::{Operation, operations::command::CommandOperation};
+use lusid_operation::{operations::command::CommandOperation, Operation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
@@ -15,7 +15,7 @@ use thiserror::Error;
 use crate::ResourceType;
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "status", rename_all = "kebab-case")]
+#[serde(tag = "status")]
 pub enum CommandParams {
     #[serde(rename = "install")]
     Install {
@@ -41,7 +41,7 @@ impl Display for CommandParams {
             } => {
                 write!(
                     f,
-                    "Command(status = Install, is_installed = {:?}, install = {}, uninstall = \
+                    "Command::Install(is_installed = {:?}, install = {}, uninstall = \
                      {:?})",
                     is_installed, install, uninstall
                 )
@@ -53,7 +53,7 @@ impl Display for CommandParams {
             } => {
                 write!(
                     f,
-                    "Command(status = Uninstall, is_installed = {:?}, install = {:?}, uninstall = \
+                    "Command::Uninstall(is_installed = {:?}, install = {:?}, uninstall = \
                      {})",
                     is_installed, install, uninstall
                 )
@@ -94,7 +94,7 @@ impl Display for CommandResource {
 
         write!(
             f,
-            "Command(status = {status}, is_installed = {:?}, install = {:?}, uninstall \
+            "Command::{status}(is_installed = {:?}, install = {:?}, uninstall \
              = {:?})",
             is_installed, install, uninstall
         )
