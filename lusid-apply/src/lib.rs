@@ -1,11 +1,11 @@
 use std::path::PathBuf;
 
 use lusid_apply_stdio::AppUpdate;
-use lusid_causality::{compute_epochs, CausalityTree, EpochError};
+use lusid_causality::{CausalityTree, EpochError, compute_epochs};
 use lusid_ctx::{Context, ContextError};
 use lusid_operation::{Operation, OperationApplyError};
 use lusid_plan::{
-    self, map_plan_subitems, plan, render_plan_tree, PlanError, PlanId, PlanNodeId, PlanTree,
+    self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_store::Store;
@@ -13,7 +13,7 @@ use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
 use lusid_view::Render;
 use rimu::SourceId;
-use rimu_interop::{to_rimu, ToRimuError};
+use rimu_interop::{ToRimuError, to_rimu};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info};

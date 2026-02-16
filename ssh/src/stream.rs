@@ -1,6 +1,6 @@
 use std::io::{BufRead, Read};
 use std::pin::Pin;
-use std::task::{ready, Context, Poll};
+use std::task::{Context, Poll, ready};
 
 use russh::CryptoVec;
 use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};

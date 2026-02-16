@@ -1,6 +1,6 @@
 use russh::client::Handler;
 use russh_sftp::{
-    client::{error::Error as SftpError, SftpSession},
+    client::{SftpSession, error::Error as SftpError},
     protocol::{FileAttributes, OpenFlags},
 };
 use std::{
@@ -311,11 +311,7 @@ fn remote_join(base: &str, rel: &Path) -> String {
             _ => {}
         }
     }
-    if out.is_empty() {
-        "/".to_string()
-    } else {
-        out
-    }
+    if out.is_empty() { "/".to_string() } else { out }
 }
 
 fn remote_parent(path: &str) -> Option<&str> {

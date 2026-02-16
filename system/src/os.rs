@@ -1,5 +1,5 @@
 use etc_os_release::{Error as OsReleaseError, OsRelease};
-use serde::{de, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de};
 use std::{
     fmt::{self, Display, Formatter},
     num::ParseIntError,

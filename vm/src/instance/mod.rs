@@ -12,7 +12,7 @@ use lusid_machine::Machine;
 use lusid_ssh::{SshKeypair, SshKeypairError};
 use lusid_system::{Arch, CpuCount, Linux, MemorySize};
 use nix::{
-    sys::signal::{kill, Signal},
+    sys::signal::{Signal, kill},
     unistd::Pid,
 };
 use serde::{Deserialize, Serialize};

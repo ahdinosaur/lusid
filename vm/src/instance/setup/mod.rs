@@ -11,15 +11,15 @@ use thiserror::Error;
 use crate::utils::get_free_tcp_port;
 use crate::{
     context::Context,
-    image::{get_image, VmImage, VmImageError},
+    image::{VmImage, VmImageError, get_image},
     instance::{
-        setup::{
-            cloud_init::{setup_cloud_init, CloudInitError},
-            kernel::{setup_kernel, ExtractKernelError, VmKernelDetails},
-            overlay::{setup_overlay, CreateOverlayImageError},
-            ovmf::{setup_ovmf_uefi_variables, ConvertOvmfVarsError},
-        },
         Vm, VmPaths, VmPort,
+        setup::{
+            cloud_init::{CloudInitError, setup_cloud_init},
+            kernel::{ExtractKernelError, VmKernelDetails, setup_kernel},
+            overlay::{CreateOverlayImageError, setup_overlay},
+            ovmf::{ConvertOvmfVarsError, setup_ovmf_uefi_variables},
+        },
     },
 };
 

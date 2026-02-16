@@ -6,7 +6,7 @@ use pin_project::pin_project;
 use std::{
     fmt::{Debug, Display},
     future::Future,
-    pin::{pin, Pin},
+    pin::{Pin, pin},
     task::Poll,
 };
 use thiserror::Error;

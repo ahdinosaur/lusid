@@ -5,7 +5,7 @@ use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
-use lusid_operation::{operations::pacman::PacmanOperation, Operation};
+use lusid_operation::{Operation, operations::pacman::PacmanOperation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};

@@ -54,6 +54,12 @@ setup: (params, system) =>
   - module: "@core/apt"
     params:
       packages: ["git"]
+
+  - module: "@core/command"
+    params:
+      status: "install"
+      install: "sudo apt-get install -y ripgrep"
+      is_installed: "command -v rg"
 ```
 
 A plan:

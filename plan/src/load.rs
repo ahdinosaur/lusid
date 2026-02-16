@@ -8,18 +8,21 @@ use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::{
-    model::{Plan, PlanFromRimuError},
     PlanId,
+    model::{Plan, PlanFromRimuError},
 };
 
 #[derive(Debug, Error, Display)]
 pub enum LoadError {
-    /// Rimu parse failed
+    /// Rimu parse failed: {0:?}
     RimuParse(Vec<rimu::ParseError>),
+
     /// No code found in source
     NoCode,
+
     /// Evaluating Rimu AST failed
     RimuEval(#[from] Box<rimu::EvalError>),
+
     /// Failed to convert Rimu value into Plan
     PlanFromRimu(Box<Spanned<PlanFromRimuError>>),
 }

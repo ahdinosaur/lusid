@@ -1,7 +1,7 @@
 use lusid::{
     create_store,
     operation::apply,
-    plan::{plan, PlanId},
+    plan::{PlanId, plan},
 };
 use std::env;
 

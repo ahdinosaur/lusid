@@ -22,3 +22,9 @@ setup: (params, system) =>
       type: "source"
       source: "./hello.txt"
       path: system.user.home + "/hello.txt"
+
+  - module: "@core/command"
+    params:
+      status: "install"
+      install: "sudo apt-get install -y ripgrep"
+      is-installed: "command -v rg"

@@ -6,8 +6,8 @@ use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_operation::{
-    operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
     Operation,
+    operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
 };
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
