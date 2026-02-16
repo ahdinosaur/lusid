@@ -5,7 +5,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{tree::CausalityTree, CausalityMeta};
+use crate::{CausalityMeta, tree::CausalityTree};
 
 #[derive(Debug, Error)]
 pub enum EpochError<NodeId> {

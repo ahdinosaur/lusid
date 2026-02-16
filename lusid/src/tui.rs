@@ -13,17 +13,17 @@ use lusid_apply_stdio::{
 use lusid_cmd::CommandError;
 use lusid_ssh::SshError;
 use ratatui::{
+    CompletedFrame, DefaultTerminal, Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
-    CompletedFrame, DefaultTerminal, Frame,
 };
 use serde_json::Error as SerdeJsonError;
 use thiserror::Error;
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, BufReader},
-    sync::mpsc::{unbounded_channel, UnboundedReceiver},
+    sync::mpsc::{UnboundedReceiver, unbounded_channel},
 };
 
 #[derive(Error, Debug)]
@@ -159,10 +159,12 @@ impl Drop for TerminalSession {
 fn read_events() -> UnboundedReceiver<Event> {
     let (event_tx, event_rx) = unbounded_channel();
 
-    std::thread::spawn(move || loop {
-        if let Ok(event) = crossterm::event::read() {
-            if event_tx.send(event).is_err() {
-                break;
+    std::thread::spawn(move || {
+        loop {
+            if let Ok(event) = crossterm::event::read() {
+                if event_tx.send(event).is_err() {
+                    break;
+                }
             }
         }
     });

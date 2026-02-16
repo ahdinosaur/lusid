@@ -52,8 +52,17 @@ setup: (params, system) =>
       path: system.user.home + ".gitconfig"
 
   - module: "@core/apt"
+    id: "install-curl"
     params:
-      packages: ["git"]
+      package: "curl"
+
+  - module: "@core/command"
+    params:
+      status: "install"
+      install: "curl -LO 'https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep_15.1.0-1_amd64.deb' && sudo dpkg -i ripgrep_15.1.0-1_amd64.deb && rm ripgrep_15.1.0-1_amd64.deb"
+      is_installed: "which rg"
+    requires:
+      - "install-curl"
 ```
 
 A plan:

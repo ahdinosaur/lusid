@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use displaydoc::Display;
 use indexmap::IndexMap;
 use rimu::{
-    from_serde_value, Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject,
+    Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject, from_serde_value,
 };
 use rimu_interop::{FromRimu, ToRimuError};
 use serde::de::DeserializeOwned;
@@ -460,7 +460,7 @@ impl FromRimu for ParamTypes {
                             return Err(ParamTypesFromRimuError::StructEntry {
                                 key: key.clone(),
                                 error: Box::new(error),
-                            })
+                            });
                         }
                     };
                     out.insert(key, field);
@@ -489,7 +489,7 @@ impl FromRimu for ParamTypes {
                                     index,
                                     key: key.clone(),
                                     error: Box::new(error),
-                                })
+                                });
                             }
                         };
                         case_out.insert(key, field);

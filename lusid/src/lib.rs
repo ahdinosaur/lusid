@@ -14,7 +14,7 @@ use tracing::error;
 use which::which;
 
 use crate::config::{Config, ConfigError, MachineConfig};
-use crate::tui::{tui, TuiError};
+use crate::tui::{TuiError, tui};
 
 #[derive(Parser, Debug)]
 #[command(name = "lusid", version, about = "Lusid CLI")]

@@ -7,13 +7,7 @@ params:
 
 setup: (params, system) =>
   - module: "@core/apt"
-    id: "install-nvim"
-    params:
-      packages: ["neovim"]
-
-  - module: "@core/apt"
-    requires:
-      - "install-nvim"
+    id: "install-curl"
     params:
       package: "curl"
 
@@ -22,3 +16,11 @@ setup: (params, system) =>
       type: "source"
       source: "./hello.txt"
       path: system.user.home + "/hello.txt"
+
+  - module: "@core/command"
+    params:
+      status: "install"
+      install: "curl -LO 'https://github.com/BurntSushi/ripgrep/releases/download/15.1.0/ripgrep_15.1.0-1_amd64.deb' && sudo dpkg -i ripgrep_15.1.0-1_amd64.deb && rm ripgrep_15.1.0-1_amd64.deb"
+      is_installed: "which rg"
+    requires:
+      - "install-curl"

@@ -6,7 +6,7 @@ use pin_project::pin_project;
 use std::{
     fmt::{Debug, Display},
     future::Future,
-    pin::{pin, Pin},
+    pin::{Pin, pin},
     task::Poll,
 };
 use thiserror::Error;
@@ -16,6 +16,7 @@ pub mod operations;
 
 use crate::operations::{
     apt::{Apt, AptOperation},
+    command::{Command, CommandOperation},
     file::{File, FileOperation},
     pacman::{Pacman, PacmanOperation},
 };
@@ -49,17 +50,24 @@ pub enum Operation {
     Apt(AptOperation),
     Pacman(PacmanOperation),
     File(FileOperation),
+    Command(CommandOperation),
 }
 
 impl Operation {
     /// Merge a set of operations by type.
     pub fn merge(operations: impl IntoIterator<Item = Operation>) -> Vec<Operation> {
-        let OperationsByType { apt, pacman, file } = partition_by_type(operations);
+        let OperationsByType {
+            apt,
+            pacman,
+            file,
+            command,
+        } = partition_by_type(operations);
 
         std::iter::empty()
             .chain(Apt::merge(apt).into_iter().map(Operation::Apt))
             .chain(Pacman::merge(pacman).into_iter().map(Operation::Pacman))
             .chain(File::merge(file).into_iter().map(Operation::File))
+            .chain(Command::merge(command).into_iter().map(Operation::Command))
             .collect()
     }
 }
@@ -74,6 +82,9 @@ pub enum OperationApplyError {
 
     #[error("file operation failed: {0:?}")]
     File(<File as OperationType>::ApplyError),
+
+    #[error("command operation failed: {0:?}")]
+    Command(<Command as OperationType>::ApplyError),
 }
 
 #[pin_project(project = OperationApplyOutputProject)]
@@ -81,6 +92,7 @@ pub enum OperationApplyOutput {
     Apt(#[pin] <Apt as OperationType>::ApplyOutput),
     Pacman(#[pin] <Pacman as OperationType>::ApplyOutput),
     File(#[pin] <File as OperationType>::ApplyOutput),
+    Command(#[pin] <Command as OperationType>::ApplyOutput),
 }
 
 impl Future for OperationApplyOutput {
@@ -92,6 +104,7 @@ impl Future for OperationApplyOutput {
             Apt(fut) => fut.poll(cx).map_err(OperationApplyError::Apt),
             Pacman(fut) => fut.poll(cx).map_err(OperationApplyError::Pacman),
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
+            Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
         }
     }
 }
@@ -101,6 +114,7 @@ pub enum OperationApplyStdout {
     Apt(#[pin] <Apt as OperationType>::ApplyStdout),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStdout),
     File(#[pin] <File as OperationType>::ApplyStdout),
+    Command(#[pin] <Command as OperationType>::ApplyStdout),
 }
 
 impl AsyncRead for OperationApplyStdout {
@@ -114,6 +128,7 @@ impl AsyncRead for OperationApplyStdout {
             Apt(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
+            Command(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -123,6 +138,7 @@ pub enum OperationApplyStderr {
     Apt(#[pin] <Apt as OperationType>::ApplyStderr),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStderr),
     File(#[pin] <File as OperationType>::ApplyStderr),
+    Command(#[pin] <Command as OperationType>::ApplyStderr),
 }
 
 impl AsyncRead for OperationApplyStderr {
@@ -136,6 +152,7 @@ impl AsyncRead for OperationApplyStderr {
             Apt(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
+            Command(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -184,6 +201,16 @@ impl Operation {
                     OperationApplyStderr::File(stderr),
                 ))
             }
+            Operation::Command(op) => {
+                let (output, stdout, stderr) = Command::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::Command)?;
+                Ok((
+                    OperationApplyOutput::Command(output),
+                    OperationApplyStdout::Command(stdout),
+                    OperationApplyStderr::Command(stderr),
+                ))
+            }
         }
     }
 }
@@ -195,6 +222,7 @@ impl Display for Operation {
             Apt(op) => Display::fmt(op, f),
             Pacman(op) => Display::fmt(op, f),
             File(op) => Display::fmt(op, f),
+            Command(op) => Display::fmt(op, f),
         }
     }
 }
@@ -206,6 +234,7 @@ impl Render for Operation {
             Apt(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Command(params) => params.render(),
         }
     }
 }
@@ -215,6 +244,7 @@ pub struct OperationsByType {
     apt: Vec<AptOperation>,
     pacman: Vec<PacmanOperation>,
     file: Vec<FileOperation>,
+    command: Vec<CommandOperation>,
 }
 
 /// Merge a set of operations by type.
@@ -222,12 +252,19 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     let mut apt: Vec<AptOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
+    let mut command: Vec<CommandOperation> = Vec::new();
     for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
             Operation::Pacman(op) => pacman.push(op),
             Operation::File(op) => file.push(op),
+            Operation::Command(op) => command.push(op),
         }
     }
-    OperationsByType { apt, pacman, file }
+    OperationsByType {
+        apt,
+        pacman,
+        file,
+        command,
+    }
 }

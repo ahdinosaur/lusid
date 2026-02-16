@@ -12,8 +12,8 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use async_promise::Promise;
-use russh::client::{connect, Config, Handle, Handler, Msg};
-use russh::keys::{ssh_key, PrivateKey, PrivateKeyWithHashAlg};
+use russh::client::{Config, Handle, Handler, Msg, connect};
+use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, ssh_key};
 use russh::{ChannelMsg, ChannelWriteHalf, CryptoVec, Error as SshError};
 use tokio::io::AsyncWrite;
 use tokio::net::ToSocketAddrs;

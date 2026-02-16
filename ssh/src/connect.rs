@@ -5,7 +5,7 @@ use russh::client::Config;
 use russh::keys::PrivateKey;
 use thiserror::Error;
 use tokio::net::ToSocketAddrs;
-use tokio::time::{sleep, Instant};
+use tokio::time::{Instant, sleep};
 
 use crate::session::{AsyncSession, NoCheckHandler};
 

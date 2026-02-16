@@ -3,6 +3,7 @@ use std::fmt::Display;
 use std::path::Path;
 use std::pin::Pin;
 use std::process::{ExitStatus, Stdio};
+use std::str::FromStr;
 use tokio::io::AsyncReadExt;
 use tokio::process::{Child, ChildStderr, ChildStdout, Command as BaseCommand};
 
@@ -272,6 +273,30 @@ impl Command {
                 stderr: String::from_utf8_lossy(&stderr).to_string(),
             }),
         }
+    }
+}
+
+impl FromStr for Command {
+    type Err = shell_words::ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let command_words = shell_words::split(s)?;
+        if command_words.is_empty() {
+            Ok(Command::new(""))
+        } else {
+            let mut cmd = Command::new(&command_words[0]);
+            cmd.args(&command_words[1..]);
+            Ok(cmd)
+        }
+    }
+}
+
+impl Command {
+    pub fn new_sh(command: &str) -> Self {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c");
+        cmd.arg(command);
+        cmd
     }
 }
 

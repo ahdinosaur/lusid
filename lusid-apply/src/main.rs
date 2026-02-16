@@ -2,9 +2,9 @@ use clap::Parser;
 use lusid_plan::PlanId;
 use std::path::PathBuf;
 use tracing::{debug, error};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
-use lusid_apply::{apply, ApplyOptions};
+use lusid_apply::{ApplyOptions, apply};
 
 #[derive(Parser, Debug)]
 #[command(name = "lusid-apply", about = "Apply a Lusid plan.", version)]

@@ -1,8 +1,8 @@
 use displaydoc::Display;
 use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};
 use lusid_system::System;
-use rimu::{call, SourceId, Span, Spanned, Value};
-use rimu_interop::{to_rimu, FromRimu};
+use rimu::{SourceId, Span, Spanned, Value, call};
+use rimu_interop::{FromRimu, to_rimu};
 use thiserror::Error;
 
 use crate::model::{IntoPlanItemError, PlanItem, SetupFunction};
