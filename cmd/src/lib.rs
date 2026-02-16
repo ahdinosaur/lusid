@@ -218,11 +218,17 @@ impl Command {
         })
     }
 
-    pub async fn run(&mut self) -> Result<ExitStatus, CommandError> {
+    pub async fn run(&mut self) -> Result<Vec<u8>, CommandError> {
         let mut output = self.output().await?;
         let status = output.status.await?;
         if status.success() {
-            Ok(status)
+            let mut stdout = Vec::new();
+            output
+                .stdout
+                .read_to_end(&mut stdout)
+                .await
+                .map_err(CommandError::ReadStdout)?;
+            Ok(stdout)
         } else {
             let mut stderr = String::new();
             output
