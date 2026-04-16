@@ -47,6 +47,16 @@ use thiserror::Error;
 /// `SecretBox<String>` (rather than `secrecy::SecretString`, a.k.a. `SecretBox<str>`)
 /// is used because only the sized form implements `serde::Deserialize`, which is
 /// needed so resource param structs can deserialise a secret field.
+///
+/// Note(cc): the [`Secret`] wrapper protects the plaintext at the boundaries,
+/// but the plan evaluator has to hand secrets to Rimu as plain [`Value::String`]
+/// (see [`ParamValue::into_rimu`] below, and `secrets_value` in `plan/src/eval.rs`).
+/// Rimu is a general-purpose expression language with no notion of secrecy, so
+/// intermediate copies made by `+` concatenation, function calls, object/list
+/// construction etc. live as ordinary [`String`]s that are not zeroised. agenix
+/// / sops-nix sidestep this by materialising secrets at activation time and
+/// passing filenames through the evaluator instead of values. Until/unless Rimu
+/// grows a `Value::Secret`, this round-trip is an accepted limitation.
 pub type Secret = Arc<SecretBox<String>>;
 
 /// Schema node: the allowed shape of a single value.
@@ -588,17 +598,31 @@ pub enum ValidateValueError {
         expected_type: Box<Spanned<ParamType>>,
         got_value: Box<Spanned<Value>>,
     },
+
     /// Invalid list item at index {index}: {error:?}
     ListItem {
         index: usize,
         #[source]
         error: Box<ValidateValueError>,
     },
+
     /// Invalid object entry for key "{key}": {error:?}
     ObjectEntry {
         key: String,
         #[source]
         error: Box<ValidateValueError>,
+    },
+
+    /// Expected a secret string, got Null — check that `ctx.secrets.<name>` matches an existing `<name>.age` file
+    //
+    // Note(cc): This is a partial mitigation for typos in `ctx.secrets.<name>`
+    // references. It only fires when the Null flows directly into a
+    // `ParamType::Secret` field. A Null that gets used in e.g. string
+    // concatenation or passed to a non-Secret param won't be caught here —
+    // see the `Note(cc)` in `plan/src/eval.rs` for the full fix (strict
+    // `ctx.secrets` map that errors at access time, which needs Rimu support).
+    NullSecret {
+        expected_type: Box<Spanned<ParamType>>,
     },
 }
 
@@ -704,6 +728,9 @@ fn validate_type(
 
         ParamType::Secret => match value_inner {
             Value::String(_) => Ok(()),
+            Value::Null => Err(ValidateValueError::NullSecret {
+                expected_type: Box::new(param_type.clone()),
+            }),
             _ => Err(mismatch(param_type, value)),
         },
 

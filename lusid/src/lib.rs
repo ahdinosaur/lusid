@@ -171,6 +171,13 @@ pub enum AppError {
 
     #[error(transparent)]
     Tui(#[from] TuiError),
+
+    #[error(
+        "secrets are configured (identity or secrets_dir) but `{context}` does not yet forward \
+         them to the target — see TODO in `lusid/src/lib.rs`. Remove the identity/secrets_dir \
+         config, or use `local apply`."
+    )]
+    SecretsNotYetSupported { context: &'static str },
 }
 
 /// Resolve the config path (CLI flag → `LUSID_CONFIG` env → CWD → `.`) and
@@ -264,7 +271,9 @@ async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
 //      most key management)
 // Until this is picked, `remote apply` should not silently drop secrets —
 // either refuse to run when the project has secrets configured, or require
-// an explicit `--no-secrets` flag.
+// an explicit `--no-secrets` flag. See `cmd_dev_apply` for the same guard
+// (`AppError::SecretsNotYetSupported`) that should be added here once this
+// is implemented.
 async fn cmd_remote_apply(_config: Config, _machine_id: String) -> Result<(), AppError> {
     todo!()
 }
@@ -283,10 +292,16 @@ async fn cmd_remote_ssh(_config: Config, _machine_id: String) -> Result<(), AppE
 // apply — see `cmd_remote_apply` and the `lusid-secrets` crate doc. Dev
 // VMs are ephemeral, so option 1 (ship identity) is tempting but still
 // leaks the project identity onto a guest disk that may be backed up.
-// Until this is picked, this command intentionally does not forward
-// identity/secrets_dir to the guest — plans that reference `ctx.secrets`
-// will see Null in a dev VM.
+// Until this is picked, we refuse to run when the project has secrets
+// configured rather than silently shipping a plan whose `ctx.secrets.*`
+// references all evaluate to Null on the guest.
 async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppError> {
+    if config.identity_path.is_some() || config.secrets_dir.is_some() {
+        return Err(AppError::SecretsNotYetSupported {
+            context: "dev apply",
+        });
+    }
+
     let MachineConfig {
         plan,
         machine,

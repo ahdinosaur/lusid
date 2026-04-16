@@ -5,9 +5,19 @@
 //!
 //! Note(cc): `ctx.secrets.<name>` is `Null` when `<name>` is not loaded — not
 //! a validation error. This matches "no secret" ergonomically but means typos
-//! silently propagate. A future improvement would be to record referenced
-//! names and warn, or to type `ctx.secrets` as a strict map that errors on
-//! unknown keys.
+//! silently propagate. Partial mitigation: `ParamType::Secret` validation
+//! (see `ValidateValueError::NullSecret` in `params/src/lib.rs`) catches the
+//! common case where a Null flows directly into a Secret-typed field. The
+//! full fix would be to type `ctx.secrets` as a strict map that errors at
+//! access time — this needs Rimu support (a `Value::Secrets`-like container
+//! or a per-object lookup hook) and is deferred.
+//!
+//! Note(cc): secrets are handed to Rimu here as plain `Value::String`, so any
+//! intermediate copies Rimu makes during evaluation (e.g. `+` concatenation,
+//! function args) live as ordinary `String`s outside the `SecretBox` envelope
+//! and are not zeroised on drop. agenix / sops-nix avoid this by passing
+//! filenames through the evaluator and materialising secret contents at
+//! activation. See `lusid_params::Secret`'s doc for the wider context.
 
 use displaydoc::Display;
 use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};

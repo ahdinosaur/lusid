@@ -32,9 +32,34 @@
 //! 3. **Re-encrypt per target**: each target machine has its own age
 //!    recipient, the host re-encrypts secrets for that recipient before
 //!    shipping. Best security, most setup cost (per-target key management).
+//!    This is also the natural destination even without a remote story:
+//!    today every machine that holds the project identity can decrypt every
+//!    secret, with no way to scope (e.g.) a laptop-only secret away from a
+//!    VPS. agenix / sops-nix both model secrets as "encrypted to a list of
+//!    recipients" for exactly this reason.
 //!
 //! Option 2 is the likely first cut. Whichever we pick, the [`Secrets`]
-//! type here is what the remote side would need to reconstruct.
+//! type here is what the remote side would need to reconstruct. Until one
+//! is picked, `cmd_dev_apply` errors with `AppError::SecretsNotYetSupported`
+//! when the project has secrets configured (see `lusid/src/lib.rs`).
+//!
+//! # Key rotation (`TODO(cc)`)
+//!
+//! No rotation tooling today. If the project identity is ever exposed, the
+//! correct response is to (1) rotate each secret plaintext, (2) generate a
+//! new identity, and (3) re-encrypt each `*.age` file to the new recipient.
+//! agenix ships this as `agenix -r`. Worth a small CLI surface here once
+//! per-target recipients land — the two features share the re-encryption
+//! primitive.
+//!
+//! # UTF-8 plaintext only (`Note(cc)`)
+//!
+//! [`decrypt_bytes`] decodes every decrypted payload as UTF-8 and errors
+//! with [`DecryptError::NotUtf8`] otherwise. This blocks binary secrets
+//! (raw keymaterial, PFX blobs, encrypted tarballs). If we need those,
+//! change [`Secret`] to wrap `Vec<u8>` and teach [`Redactor`] to substring-
+//! match on bytes. Cost is a minor API churn across every crate that
+//! currently calls `expose_secret()` and gets a `&String`.
 
 use std::collections::HashMap;
 use std::io::Read;
