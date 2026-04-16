@@ -72,7 +72,7 @@ pub enum GetLinuxError {
 
 impl Linux {
     pub async fn get() -> Result<Self, GetLinuxError> {
-        let os_release = block_in_place(|| OsRelease::open())?;
+        let os_release = block_in_place(OsRelease::open)?;
 
         let id = os_release.id();
         let version_id = os_release.version_id();
