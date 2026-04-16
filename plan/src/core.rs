@@ -4,8 +4,8 @@
 
 use lusid_params::{ParamValues, validate};
 use lusid_resource::{
-    ResourceParams, ResourceType, apt::Apt, command::Command, file::File, git::Git, pacman::Pacman,
-    systemd::Systemd,
+    ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command, file::File,
+    git::Git, pacman::Pacman, systemd::Systemd,
 };
 use rimu::{Spanned, Value};
 
@@ -25,6 +25,7 @@ pub fn core_module(
 ) -> Result<ResourceParams, PlanItemToResourceError> {
     match core_module_id {
         Apt::ID => core_module_for_resource::<Apt>(params).map(ResourceParams::Apt),
+        AptRepo::ID => core_module_for_resource::<AptRepo>(params).map(ResourceParams::AptRepo),
         File::ID => core_module_for_resource::<File>(params).map(ResourceParams::File),
         Pacman::ID => core_module_for_resource::<Pacman>(params).map(ResourceParams::Pacman),
         Command::ID => core_module_for_resource::<Command>(params).map(ResourceParams::Command),
