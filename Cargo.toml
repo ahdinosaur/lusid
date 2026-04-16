@@ -19,6 +19,8 @@ members = [
   "store",
   "system",
   "vm",
+  "vm-test",
+  "vm-test-macros",
   "view", "tree",
 ]
 

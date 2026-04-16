@@ -1,0 +1,21 @@
+[package]
+name = "lusid-vm-test"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+lusid-apply-stdio = { path = "../apply-stdio", version = "0.1" }
+lusid-ctx = { path = "../ctx", version = "0.1" }
+lusid-machine = { path = "../machine", version = "0.1" }
+lusid-ssh = { path = "../ssh", version = "0.1" }
+lusid-system = { path = "../system", version = "0.1" }
+lusid-vm = { path = "../vm", version = "0.1" }
+lusid-vm-test-macros = { path = "../vm-test-macros", version = "0.1" }
+nix.workspace = true
+russh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }

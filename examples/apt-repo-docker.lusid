@@ -1,0 +1,12 @@
+name: "apt-repo-docker"
+version: "0.1.0"
+
+setup: (params, system) =>
+  - module: "@core/apt-repo"
+    id: "docker-repo"
+    params:
+      name: "docker"
+      uris: ["https://download.docker.com/linux/debian"]
+      suites: ["trixie"]
+      components: ["stable"]
+      key_url: "https://download.docker.com/linux/debian/gpg"

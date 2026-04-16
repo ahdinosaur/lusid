@@ -2345,6 +2345,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "lusid-vm-test"
+version = "0.1.0"
+dependencies = [
+ "lusid-apply-stdio",
+ "lusid-ctx",
+ "lusid-machine",
+ "lusid-ssh",
+ "lusid-system",
+ "lusid-vm",
+ "lusid-vm-test-macros",
+ "nix 0.30.1",
+ "russh",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "lusid-vm-test-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.108",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
