@@ -1,3 +1,36 @@
+//! Pipeline orchestrator: loads a plan, validates params, builds the resource
+//! → state → change → operation trees, schedules operations by epoch, and
+//! applies them — all while streaming [`AppUpdate`]s as newline-delimited
+//! JSON on stdout for the `lusid` TUI to render.
+//!
+//! The public surface is [`apply`] + [`ApplyOptions`]; `main.rs` is a thin
+//! clap wrapper.
+//!
+//! ## Pipeline (one phase per [`AppUpdate`] group)
+//!
+//! 1. [`plan`](lusid_plan::plan) — evaluate the plan, validate params,
+//!    produce a [`PlanTree<ResourceParams>`](lusid_plan::PlanTree).
+//! 2. `ResourceParams → Resources` via `ResourceParams::resources` — each
+//!    plan node can expand into multiple resources with intra-scope ordering
+//!    (file mode/user/group, etc.), handled by
+//!    [`map_plan_subitems`](lusid_plan::map_plan_subitems).
+//! 3. `Resource → ResourceState` via async state probes. This is the only
+//!    I/O-bound phase prior to apply; emits per-leaf `NodeStart`/`NodeComplete`
+//!    so the TUI can show a spinner while each probe runs.
+//! 4. `(Resource, State) → ResourceChange` — pure; `None` means "no-op, prune".
+//! 5. `ResourceChange → Operations` tree — each change expands to one or
+//!    more ordered operations. Short-circuits if step 4 produced no changes.
+//! 6. [`compute_epochs`] — Kahn's topological layering over the causality
+//!    metadata in the operations tree; operations within an epoch are
+//!    independent, operations across epochs have a required-before edge.
+//! 7. [`Operation::merge`] + [`Operation::apply`] — per-epoch, merge like
+//!    operations (e.g. multiple `apt install`s into one), then apply
+//!    sequentially. Stdout + stderr are streamed line-by-line back into
+//!    `AppUpdate` events.
+//!
+//! Human-facing output belongs on stderr (via `tracing`); stdout is reserved
+//! for the machine-readable protocol.
+
 use std::path::PathBuf;
 
 use lusid_apply_stdio::AppUpdate;
@@ -18,6 +51,9 @@ use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tracing::{debug, error, info};
 
+/// Inputs for [`apply`]. `root_path` is the lusid working-dir root passed to
+/// [`Context::create`]; `plan_id` selects a plan; `params_json` is an
+/// optional JSON object (validated against the plan's params schema).
 pub struct ApplyOptions {
     pub root_path: PathBuf,
     pub plan_id: PlanId,
@@ -63,6 +99,11 @@ pub enum ApplyError {
     OperationApply(#[from] OperationApplyError),
 }
 
+/// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it
+/// goes. Returns `Ok(())` on success (including the "no changes" early
+/// return after phase 4) or the first fatal error. On operation failure,
+/// an `OperationApplyComplete { error: Some(..) }` is emitted before the
+/// error propagates so the TUI can show which operation failed.
 pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     info!("starting");
     let ApplyOptions {
@@ -280,6 +321,11 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     Ok(())
 }
 
+/// Serialize `update` to a single JSON line on stdout and flush.
+///
+/// The flush is load-bearing: the TUI reads line-by-line with
+/// `AsyncBufRead::lines()`, so buffering would make progress updates
+/// invisible to the reader even though the work completed long before.
 async fn emit(update: AppUpdate) -> Result<(), ApplyError> {
     let mut stdout = tokio::io::stdout();
 

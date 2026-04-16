@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+/// Horizontal alignment hint for a [`Line`](crate::Line) or
+/// [`Paragraph`](crate::Paragraph). Advisory — see those types' docs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Alignment {
     Left,
@@ -7,6 +9,9 @@ pub enum Alignment {
     Right,
 }
 
+/// Terminal-style text attributes. All fields optional/false by default so
+/// that `TextStyle::default()` is "no styling" and a builder chain only sets
+/// what's wanted.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TextStyle {
     pub foreground_color: Option<Color>,
@@ -67,6 +72,8 @@ impl TextStyle {
     }
 }
 
+/// The 16 standard terminal colours. Named rather than RGB so they serialize
+/// compactly and defer to the terminal's palette.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Color {
     Black,

@@ -1,3 +1,10 @@
+//! CPU architecture detection via Rust's `cfg(target_arch)`.
+//!
+//! The [`Bitness`] type is currently only `64-bit`; kept around so future 32-bit or
+//! other width categorizations slot in without changing consumers.
+// Note(cc): `Bitness` is defined here but not referenced anywhere else in the
+// workspace. Delete if no use materializes soon.
+
 use std::fmt::Display;
 
 use serde::{Deserialize, Serialize};

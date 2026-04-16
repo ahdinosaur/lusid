@@ -1,3 +1,7 @@
+//! `lusid-apply` CLI entry point. Tracing goes to stderr so stdout stays
+//! clean for the [`AppUpdate`](lusid_apply_stdio::AppUpdate) JSON stream.
+//! Exits non-zero on any pipeline error (the error is also logged).
+
 use clap::Parser;
 use lusid_plan::PlanId;
 use std::path::PathBuf;

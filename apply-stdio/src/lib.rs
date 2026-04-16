@@ -1,30 +1,43 @@
-//! Flat view-tree utilities and an incremental AppView state machine.
+//! Wire protocol between `lusid-apply` (producer) and the `lusid` TUI (consumer).
 //!
-//! Design and assumptions (mirrors lusid_tree::FlatTree):
-//! - Root index is always 0.
-//! - Nodes are stored in a Vec<Option<Node>>; missing children (None) or
-//!   out-of-bounds indices are tolerated. Conversions skip them.
-//! - Children indices are immutable once set; new subtrees are appended to
-//!   the nodes vector (or replace existing indices at the target root).
-//! - "Replace subtree at index" removes the old subtree (recursively sets
-//!   children to None) before inserting the new one.
+//! `lusid-apply` emits newline-delimited JSON [`AppUpdate`]s on stdout as the
+//! pipeline progresses (params → resources → states → changes → operations →
+//! apply). The TUI deserializes each update and folds it into an [`AppView`]
+//! — a phase-tagged state machine that accumulates one [`FlatViewTree`] per
+//! pipeline stage, plus a `Vec<Vec<OperationView>>` for the per-epoch
+//! streaming stdout/stderr during apply.
 //!
-//! Rendering:
-//! - ViewNode implements Render so each leaf can be rendered inline.
-//! - FlatViewTree implements Display by converting to ViewTree leniently
-//!   (skips missing children, replaces missing root with a simple "?" view).
+//! ## FlatViewTree
 //!
-//! AppView:
-//! - AppView is an enum with a variant per phase. Each subsequent phase
-//!   accumulates data. The state machine is driven by AppUpdate inputs.
-//! - AppView::try_update returns Result for correct error handling.
-//!   AppView::update keeps backward compatibility by ignoring errors.
+//! Mirrors [`lusid_tree::FlatTree`](lusid_tree::FlatTree) but storing
+//! [`lusid_view::View`]s instead of domain nodes, so the TUI never needs to
+//! understand lusid's domain types:
+//!
+//! - Root is always index `0`.
+//! - Arena is `Vec<Option<Node>>`; missing children / out-of-bounds indices
+//!   are tolerated (lenient rendering).
+//! - Subtrees are appended; "replace subtree at index" recursively clears the
+//!   old children before writing the new.
+//!
+//! [`FlatViewTree::template`] strips leaves back to [`ViewNode::NotStarted`]
+//! while preserving the structure — each pipeline phase builds from the
+//! previous phase's template, so the TUI shows the eventual shape up-front
+//! and fills leaves in as work completes.
+//!
+//! ## AppView as a state machine
+//!
+//! [`AppView::update`] takes `(self, AppUpdate) -> Result<Self, AppViewError>`.
+//! Invalid transitions return [`AppViewError::InvalidTransition`] so bad
+//! input from the pipe can't silently corrupt UI state. Accessors
+//! ([`AppView::resources`] etc.) return `None` before that phase has been
+//! reached, so the TUI can render partial progress.
 
 use lusid_view::{Fragment, Render, View, ViewTree};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// A simple node status that can be rendered.
+/// Per-leaf progress marker, rendered with an emoji prefix:
+/// 🟩 not-started, ⌛ in-flight, ✅ + the finished view.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub enum ViewNode {
     #[default]
@@ -45,14 +58,17 @@ impl Render for ViewNode {
     }
 }
 
-/// A flattened view tree node; children refer to indices in a flat arena.
+/// Arena entry. Branch children are indices into the containing
+/// [`FlatViewTree`]; leaves carry a [`ViewNode`] progress marker directly
+/// (not a [`View`]), since leaves are the nodes that advance through the
+/// "not started → started → complete" lifecycle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FlatViewTreeNode {
     Branch { view: View, children: Vec<usize> },
     Leaf { view: ViewNode },
 }
 
-/// A flat view tree with root fixed at index 0.
+/// Arena-backed view tree, root fixed at index `0`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FlatViewTree {
     nodes: Vec<Option<FlatViewTreeNode>>,
@@ -259,7 +275,9 @@ fn replace_view_tree_nodes(
     }
 }
 
-/// A UI update event stream.
+/// Protocol message from `lusid-apply` to the TUI. Each phase has a
+/// `*Start` / per-node / `*Complete` triple. The `Operations*` cluster at
+/// the end carries per-operation stdout/stderr streamed as work executes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum AppUpdate {
     ResourceParams {
@@ -320,7 +338,9 @@ pub enum AppUpdate {
     OperationsApplyComplete,
 }
 
-/// A single operation's live view.
+/// One operation's live state during the apply phase. `stdout`/`stderr` are
+/// appended to as `OperationApplyStdout`/`OperationApplyStderr` arrive; the
+/// TUI renders the tail of these in the per-operation pane.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationView {
     pub label: View,
@@ -342,7 +362,14 @@ impl OperationView {
     }
 }
 
-/// AppView phases, accumulating data at each step.
+/// TUI state. Each variant carries everything from the prior phases plus the
+/// newly-started one. `Done` is the terminal phase — data is frozen and the
+/// TUI waits for user exit.
+///
+/// Note(cc): variants duplicate a growing list of fields rather than
+/// composing. Adding a new pipeline stage means touching every downstream
+/// arm. Acceptable while there are seven stages; worth revisiting if more
+/// are added.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub enum AppView {
     #[default]
@@ -407,7 +434,10 @@ pub enum AppViewError {
 }
 
 impl AppView {
-    /// State machine update with error handling.
+    /// Fold one [`AppUpdate`] into the view. Consumes `self` to prevent
+    /// transient invalid states from being observed; any unexpected
+    /// (phase, update) combination returns [`AppViewError::InvalidTransition`]
+    /// and the caller can decide whether to abort or skip.
     pub fn update(self, update: AppUpdate) -> Result<Self, AppViewError> {
         use AppUpdate::*;
         match (self, update) {
@@ -751,6 +781,10 @@ impl AppView {
                     .get_mut(o)
                     .ok_or(AppViewError::OperationIndexOutOfBounds(e, o))?;
                 op.stderr.push_str(&stderr);
+                // TODO(cc): this pushes '\n' to stdout, not stderr — almost
+                // certainly a copy-paste bug (see the matching stdout arm
+                // above). Effect: stderr has no line breaks, stdout gains
+                // spurious blank lines whenever stderr arrives.
                 op.stdout.push('\n');
                 Ok(AppView::OperationsApply {
                     resource_params,

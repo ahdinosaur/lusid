@@ -1,3 +1,11 @@
+//! OS detection. On Linux we parse `/etc/os-release` via the `etc-os-release` crate
+//! and map the `ID` to a known distro variant (Ubuntu / Debian / Arch for now).
+//!
+//! The serde shape uses nested internal tags: the outer `type: "linux"` discriminates
+//! [`Os`], and the inner `linux: "ubuntu"` discriminates [`Linux`]. Version fields
+//! are named after the distro (`ubuntu: "22.04"`, `debian: 12`) so the plan-facing
+//! YAML reads naturally.
+
 use etc_os_release::{Error as OsReleaseError, OsRelease};
 use serde::{Deserialize, Serialize, de};
 use std::{

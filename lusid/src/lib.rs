@@ -1,3 +1,21 @@
+//! The `lusid` CLI: user-facing front door for applying plans to local,
+//! remote, and VM-dev targets.
+//!
+//! Architecture: the CLI doesn't run the apply pipeline in-process. It
+//! spawns [`lusid-apply`](lusid_apply) (either locally for `local apply`,
+//! or inside a dev VM over SSH for `dev apply`) and pipes its stdout JSON
+//! into the [`tui`] module to render a live pipeline view. stderr is
+//! buffered and shown on a separate pane.
+//!
+//! ## Subcommands
+//!
+//! - `machines list` — table of all machines in `lusid.toml`.
+//! - `local apply` — apply the machine matching `$(hostname)` to this host.
+//! - `remote apply`/`ssh` — **unimplemented**, `todo!()` today.
+//! - `dev apply`/`ssh` — spin up a local QEMU VM (via [`lusid-vm`]), SFTP
+//!   the plan + `lusid-apply` binary into it, and run apply over SSH (or
+//!   open an interactive shell).
+
 mod config;
 mod tui;
 
@@ -16,6 +34,14 @@ use which::which;
 use crate::config::{Config, ConfigError, MachineConfig};
 use crate::tui::{TuiError, tui};
 
+/// Parsed CLI. `lusid_apply_linux_*_path` point at prebuilt apply binaries
+/// for each target arch — the dev workflow uploads these to VMs rather than
+/// compiling inside the guest. Both fall back to `lusid.toml` → defaults.
+///
+/// Note(cc): only x86_64 and aarch64 are plumbed. Adding a new target arch
+/// means adding a new field + env var here *and* a selector wherever the
+/// arch is matched. Worth revisiting as a `HashMap<Arch, PathBuf>` if the
+/// list grows.
 #[derive(Parser, Debug)]
 #[command(name = "lusid", version, about = "Lusid CLI")]
 pub struct Cli {
@@ -138,6 +164,8 @@ pub enum AppError {
     Tui(#[from] TuiError),
 }
 
+/// Resolve the config path (CLI flag → `LUSID_CONFIG` env → CWD → `.`) and
+/// load `lusid.toml` from it.
 pub async fn get_config(cli: &Cli) -> Result<Config, AppError> {
     let config_path = cli
         .config_path
@@ -149,6 +177,7 @@ pub async fn get_config(cli: &Cli) -> Result<Config, AppError> {
     Ok(config)
 }
 
+/// Dispatch on the parsed subcommand.
 pub async fn run(cli: Cli, config: Config) -> Result<(), AppError> {
     match cli.command {
         Cmd::Machines { command } => match command {
@@ -173,7 +202,9 @@ async fn cmd_machines_list(config: Config) -> Result<(), AppError> {
     Ok(())
 }
 
-// Rewritten to use TUI
+// Spawns `lusid-apply` as a subprocess and pipes its stdout + stderr into
+// the TUI. `Command::output` here returns streaming handles, not a finished
+// `std::process::Output` — naming is from `lusid_cmd`, not `std`.
 async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
     let Config {
         ref lusid_apply_linux_x86_64_path,
@@ -203,6 +234,10 @@ async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
     Ok(())
 }
 
+// TODO(cc): implement remote apply/ssh. Expected shape: resolve the machine
+// from config, connect to its hostname over SSH (using either agent auth or
+// a configured key), upload the plan + lusid-apply binary, run apply, and
+// pipe through the TUI — essentially `cmd_dev_*` without the VM bring-up.
 async fn cmd_remote_apply(_config: Config, _machine_id: String) -> Result<(), AppError> {
     todo!()
 }
@@ -211,6 +246,11 @@ async fn cmd_remote_ssh(_config: Config, _machine_id: String) -> Result<(), AppE
     todo!()
 }
 
+// `dev apply`: boot a local QEMU VM matching the machine spec, upload the
+// plan directory and a prebuilt `lusid-apply` binary over SFTP, then run
+// apply remotely and stream its stdout/stderr through the TUI just like
+// local apply. The VM's SSH keypair lives inside its instance dir (see
+// `lusid_vm`).
 async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppError> {
     let MachineConfig {
         plan,
@@ -282,6 +322,9 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
     Ok(())
 }
 
+// `dev ssh`: boot the VM (idempotent — reuses the instance if it already
+// exists) and attach the local TTY to a remote interactive shell via
+// `Ssh::terminal`. No TUI, no apply — just a shell inside the guest.
 async fn cmd_dev_ssh(config: Config, machine_id: String) -> Result<(), AppError> {
     let MachineConfig {
         plan: _,

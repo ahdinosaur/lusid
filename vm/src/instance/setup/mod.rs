@@ -1,3 +1,8 @@
+//! One-time per-instance setup: download the guest image, build the overlay,
+//! extract the kernel, make UEFI vars writeable, mint SSH keys, seed
+//! cloud-init. Each sub-step is idempotent (skips work if the output file
+//! already exists), so partial runs can be resumed by re-invoking.
+
 mod cloud_init;
 mod kernel;
 mod overlay;
@@ -56,6 +61,11 @@ pub enum VmSetupError {
     NoOpenPortsAvailable,
 }
 
+/// Do everything needed to take a fresh instance id to a bootable (but not yet
+/// running) [`Vm`]. Allocates the host-side SSH forwarding port with
+/// [`get_free_tcp_port`] — there is an inherent TOCTOU here (another process
+/// could grab the port between release and qemu binding it), but in practice
+/// picking at spawn time and binding immediately is close enough.
 pub async fn setup_instance(
     ctx: &mut Context,
     options: VmSetupOptions<'_>,
@@ -118,7 +128,9 @@ pub async fn setup_instance(
         cpu_count,
         ports,
         graphics,
-        // TODO set via global lusid config
+        // TODO(cc): plumb through global lusid config so KVM can be disabled
+        // on hosts without `/dev/kvm` access. `instance_start` currently
+        // defaults this to `true`, which will fail on such hosts.
         kvm: None,
     })
 }

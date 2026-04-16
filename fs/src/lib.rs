@@ -1,3 +1,22 @@
+//! Async filesystem helpers used by lusid operations and resources.
+//!
+//! Every function wraps a `tokio::fs` / `nix` / `filetime` call with a contextual
+//! [`FsError`] variant — errors always include the offending path(s), so diagnostics
+//! don't require parsing raw `io::Error` messages.
+//!
+//! Highlights:
+//! - [`write_file_atomic`] / [`copy_file_atomic`]: write to a sibling temp file, copy
+//!   destination metadata (or source metadata, respectively), then rename. This means
+//!   readers never observe a half-written file.
+//! - [`change_owner`] / [`change_owner_by_id`]: uid/gid changes, Unix-only.
+//! - [`copy_dir`]: shells out to `cp --recursive` (see the note on the function for
+//!   portability caveats).
+//
+// TODO(cc): like `lusid-cmd`, this crate relies on tokio features (`fs`, `io-util`,
+// `process`) that are enabled transitively via the workspace rather than declared in
+// its own `Cargo.toml`. `cargo check -p lusid-fs` in isolation fails. Declare the
+// needed tokio features locally.
+
 use nix::unistd::{Group, User};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
@@ -210,6 +229,12 @@ pub async fn create_dir<P: AsRef<Path>>(path: P) -> Result<(), FsError> {
         })
 }
 
+/// Recursively copy a directory tree.
+///
+/// Note(cc): shells out to `cp --recursive`, which is GNU coreutils — BSD `cp` on
+/// macOS uses `-R` instead, and Windows has no `cp` at all. If we ever care about
+/// non-Linux targets, swap to a Rust-native walker (e.g. the `walkdir` + manual copy
+/// pattern, or the `fs_extra` crate).
 pub async fn copy_dir<F: AsRef<Path>, T: AsRef<Path>>(from: F, to: T) -> Result<(), FsError> {
     let from_path = from.as_ref();
     let to_path = to.as_ref();
@@ -450,6 +475,11 @@ pub async fn write_file<P: AsRef<Path>>(path: P, data: &[u8]) -> Result<(), FsEr
     Ok(())
 }
 
+/// Atomically write `data` to `path`.
+///
+/// Strategy: write to a sibling temp file, copy existing destination metadata onto the
+/// temp file (permissions, owner, times — so users don't see a file whose mode changed
+/// when it shouldn't have), then rename. Readers never observe a partial write.
 pub async fn write_file_atomic<P: AsRef<Path>>(path: P, data: &[u8]) -> Result<(), FsError> {
     let dest_path = path.as_ref();
     let temp_path = temporary_path_for(dest_path);
@@ -524,6 +554,10 @@ pub async fn read_file_to_bytes<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, FsEr
     })
 }
 
+/// Atomically copy `from` → `to`, preserving the source's permissions/owner/times.
+///
+/// Unlike [`write_file_atomic`], this copies metadata from the *source* (since the
+/// whole point is replicating it). The sibling-temp-then-rename dance is identical.
 pub async fn copy_file_atomic<F: AsRef<Path>, T: AsRef<Path>>(
     from: F,
     to: T,
@@ -612,6 +646,9 @@ pub async fn create_symlink<F: AsRef<Path>, T: AsRef<Path>>(from: F, to: T) -> R
         })
 }
 
+// Sibling temp path: `<path>.<nanos>.tmp`. Nanosecond resolution is effectively
+// collision-free for sequential writes to the same target; parallel writers to the
+// same target would be racing anyway and the final `rename` is atomic.
 fn temporary_path_for(path: &Path) -> PathBuf {
     let time = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)

@@ -1,3 +1,21 @@
+//! Ratatui-based TUI for the apply pipeline. [`tui`] consumes the stdout
+//! JSON stream from [`lusid-apply`](lusid_apply) plus its stderr, folds
+//! each [`AppUpdate`] into an [`AppView`] (from
+//! [`lusid-apply-stdio`](lusid_apply_stdio)), and draws:
+//!
+//! - a top "pipeline" strip showing which stage the apply is currently in
+//! - a main pane for the currently-selected stage's
+//!   [`FlatViewTree`] (tree navigation with collapse/expand/selection)
+//! - an "operations apply" pane during execution that flat-lists each
+//!   operation and shows its streaming stdout/stderr
+//! - a separate stderr page accumulating the full apply stderr buffer
+//!
+//! Input: crossterm events are read on a dedicated OS thread (blocking read)
+//! and forwarded into a tokio mpsc channel so the main select loop stays
+//! responsive. Terminal raw-mode is acquired via `ratatui::init` and
+//! restored in the [`TerminalSession`]'s `Drop` so panics don't leave the
+//! terminal in a bad state.
+
 #![allow(clippy::collapsible_if)]
 
 use std::collections::HashSet;
@@ -56,6 +74,13 @@ pub enum TuiError {
     TaskJoin(#[from] tokio::task::JoinError),
 }
 
+/// Drive the TUI. Reads `stdout` line-by-line as JSON `AppUpdate`s and
+/// `stderr` line-by-line as raw text, while racing a `wait` future that
+/// resolves when the apply process exits. Returns when the user quits or
+/// the wait future resolves; surfaces the apply's exit error if any.
+///
+/// Generic over the IO and wait types so the same function works for a
+/// subprocess (`lusid-cmd`) and an SSH command handle (`lusid-ssh`).
 pub async fn tui<Stdout, Stderr, Wait, WaitError>(
     stdout: Stdout,
     stderr: Stderr,
@@ -329,6 +354,15 @@ impl OperationsApplyState {
     }
 }
 
+/// Top-level TUI state. Per-stage `TreeState`s track which nodes the user
+/// has collapsed and which row is selected — kept separate so switching
+/// stages preserves per-stage navigation.
+///
+/// `follow_pipeline` auto-advances the visible stage as new phases arrive;
+/// disabled by the user when they navigate manually.
+///
+/// `stderr_buffer` accumulates *all* stderr (not line-limited) so the user
+/// can scroll back through the full apply log on the dedicated page.
 #[derive(Debug, Clone)]
 struct TuiApp {
     app_view: AppView,

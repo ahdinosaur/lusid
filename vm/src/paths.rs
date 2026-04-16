@@ -3,6 +3,10 @@ use std::path::{Path, PathBuf};
 use thiserror::Error;
 use which::which_global;
 
+/// Base paths specialised for this crate. Cacheable downloads (guest images +
+/// sums) live under `cache_dir/vm/images`; per-VM mutable state (overlays,
+/// OVMF vars, kernel, cloud-init, keypair, pid) lives under
+/// `data_dir/vm/instances/<id>`.
 #[derive(Debug, Clone)]
 pub struct Paths {
     base: BasePaths,
@@ -34,6 +38,11 @@ impl Paths {
 #[error(transparent)]
 pub struct ExecutablePathsError(#[from] which::Error);
 
+/// Absolute paths to the external binaries the VM pipeline shells out to.
+/// Resolved once via `$PATH` at [`Context`](crate::context::Context)
+/// construction; [`ExecutablePaths::new`] fails fast if any are missing so
+/// the user gets a clear install-missing-deps error rather than a runtime
+/// ENOENT deep inside setup.
 #[derive(Debug, Clone)]
 pub struct ExecutablePaths {
     virt_get_kernel: PathBuf,

@@ -1,3 +1,22 @@
+//! Concrete mutations executed against a target machine.
+//!
+//! Operations are what actually *runs* — `apt install`, `write file`, `git clone`,
+//! etc. They are produced by [`lusid_resource::ResourceChange::operations`] and are
+//! the leaves of the causality tree handed to `lusid-apply` for per-epoch execution.
+//!
+//! Each operation family (apt, pacman, file, command, git) implements the
+//! [`OperationType`] trait, which defines:
+//!
+//! - **`merge`** — coalesce same-type operations in one epoch (e.g. combine
+//!   multiple `apt install` calls into one).
+//! - **`apply`** — run the operation against the machine and return a future plus
+//!   streaming stdout/stderr that the TUI can tail.
+//!
+//! The crate-level [`Operation`] / [`OperationApplyError`] / [`OperationApplyOutput`]
+//! / [`OperationApplyStdout`] / [`OperationApplyStderr`] enums are thin dispatchers.
+//! The three `ApplyXxx` enums use `pin_project` so they can forward `Future` /
+//! `AsyncRead` polls to the per-type impls without boxing each call.
+
 use async_trait::async_trait;
 use core::task;
 use lusid_ctx::Context;
@@ -22,30 +41,42 @@ use crate::operations::{
     pacman::{Pacman, PacmanOperation},
 };
 
-/// OperationType specifies how to merge and apply a concrete Operation type.
-///
-/// Operations are the results of ResourceChanges and are executed per epoch.
-/// Each type decides how to merge same-type operations and how to apply them.
+/// One family of operations (apt, pacman, file, …). Implementors are zero-sized
+/// markers; the real data lives in `Operation`.
 #[async_trait]
 pub trait OperationType {
+    /// The concrete operation value (e.g. `AptOperation::Install { packages }`).
     type Operation: Render;
 
-    /// Merge a set of operations of this type within the same epoch.
-    /// Implementations should coalesce operations to a minimal set.
+    /// Coalesce a batch of same-type operations scheduled in one epoch.
+    ///
+    /// For package managers this unions install sets. For side-effecting operations
+    /// (file, command, git) the order matters, so `merge` is a no-op.
     fn merge(operations: Vec<Self::Operation>) -> Vec<Self::Operation>;
 
+    /// Failure returned when `apply`'s future resolves.
     type ApplyError;
+
+    /// Stdout stream of the running operation — polled by the TUI.
     type ApplyStdout: AsyncRead;
+
+    /// Stderr stream of the running operation — polled by the TUI.
     type ApplyStderr: AsyncRead;
+
+    /// Future that resolves when the operation finishes.
     type ApplyOutput: Future<Output = Result<(), Self::ApplyError>>;
 
-    /// Apply an operation of this type.
+    /// Kick off the operation and return its completion future plus live
+    /// stdout/stderr streams. The caller drives all three concurrently so output
+    /// is streamed in real time.
     async fn apply(
         ctx: &mut Context,
         operation: &Self::Operation,
     ) -> Result<(Self::ApplyOutput, Self::ApplyStdout, Self::ApplyStderr), Self::ApplyError>;
 }
 
+/// Dispatcher over every operation family. Every leaf of the per-epoch causality
+/// tree is an `Operation`.
 #[derive(Debug, Clone)]
 pub enum Operation {
     Apt(AptOperation),
@@ -56,7 +87,11 @@ pub enum Operation {
 }
 
 impl Operation {
-    /// Merge a set of operations by type.
+    /// Partition `operations` by family, merge each family via its [`OperationType::merge`]
+    /// impl, and re-wrap in family order (apt, pacman, file, command, git).
+    ///
+    /// Called once per epoch before `apply` — the whole point is to collapse e.g. 20
+    /// separate `apt install` operations into one multi-package install.
     pub fn merge(operations: impl IntoIterator<Item = Operation>) -> Vec<Operation> {
         let OperationsByType {
             apt,
@@ -76,6 +111,7 @@ impl Operation {
     }
 }
 
+/// Dispatcher over any per-family `ApplyError`.
 #[derive(Error, Debug)]
 pub enum OperationApplyError {
     #[error("apt operation failed: {0:?}")]
@@ -94,6 +130,8 @@ pub enum OperationApplyError {
     Git(<Git as OperationType>::ApplyError),
 }
 
+/// Unified completion future for any operation. `Future::poll` forwards to the active
+/// variant via `pin_project`, avoiding a per-operation boxing allocation.
 #[pin_project(project = OperationApplyOutputProject)]
 pub enum OperationApplyOutput {
     Apt(#[pin] <Apt as OperationType>::ApplyOutput),
@@ -118,6 +156,8 @@ impl Future for OperationApplyOutput {
     }
 }
 
+/// Unified stdout stream for any running operation. Implements [`AsyncRead`] by
+/// forwarding to the active variant.
 #[pin_project(project = OperationApplyStdoutProject)]
 pub enum OperationApplyStdout {
     Apt(#[pin] <Apt as OperationType>::ApplyStdout),
@@ -144,6 +184,8 @@ impl AsyncRead for OperationApplyStdout {
     }
 }
 
+/// Unified stderr stream for any running operation. Implements [`AsyncRead`] by
+/// forwarding to the active variant.
 #[pin_project(project = OperationApplyStderrProject)]
 pub enum OperationApplyStderr {
     Apt(#[pin] <Apt as OperationType>::ApplyStderr),
@@ -171,7 +213,9 @@ impl AsyncRead for OperationApplyStderr {
 }
 
 impl Operation {
-    /// Apply a set of operations by type
+    /// Start the operation on the target machine. Returns a completion future plus
+    /// streaming stdout/stderr. The caller (typically `lusid-apply`) should drive the
+    /// future and both streams concurrently so output is surfaced in real time.
     pub async fn apply(
         &self,
         ctx: &mut Context,
@@ -264,6 +308,7 @@ impl Render for Operation {
     }
 }
 
+/// Operations grouped by family, ready to be fed to each family's `merge`.
 #[derive(Debug, Clone)]
 pub struct OperationsByType {
     apt: Vec<AptOperation>,
@@ -273,7 +318,7 @@ pub struct OperationsByType {
     git: Vec<GitOperation>,
 }
 
-/// Merge a set of operations by type.
+/// Bucket a mixed iterator of operations into per-family vectors.
 fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> OperationsByType {
     let mut apt: Vec<AptOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();

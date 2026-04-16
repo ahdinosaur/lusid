@@ -1,3 +1,14 @@
+//! Abstract content-addressed store for file-like bytes referenced by a plan.
+//!
+//! [`Store`] multiplexes over one or more [`SubStore`] backends. Today there's only
+//! `LocalFile` (read straight off disk), but the shape is deliberately extensible:
+//! future backends could cover HTTP URLs, git blobs, or content-hashed blobs living
+//! in the XDG cache directory.
+//
+// TODO(cc): the only backend today is a thin wrapper around `tokio::fs::read`. When
+// adding remote backends, wire up the `cache_dir` argument that `SubStore::new`
+// already receives (currently ignored by `LocalFileStore`).
+
 use async_trait::async_trait;
 use displaydoc::Display;
 use std::{
@@ -7,6 +18,7 @@ use std::{
 };
 use thiserror::Error;
 
+/// A single storage backend (e.g. local file, remote URL, git blob).
 #[async_trait]
 pub trait SubStore {
     type ItemId;
@@ -17,11 +29,13 @@ pub trait SubStore {
     async fn read(&mut self, id: &Self::ItemId) -> Result<Vec<u8>, Self::Error>;
 }
 
+/// Multiplexed store: dispatches a [`StoreItemId`] to the right backend.
 #[derive(Debug, Clone)]
 pub struct Store {
     local_file_store: LocalFileStore,
 }
 
+/// Tagged identifier for a store item — picks which backend handles the read.
 #[derive(Debug, Clone)]
 pub enum StoreItemId {
     LocalFile(PathBuf),

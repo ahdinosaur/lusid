@@ -9,6 +9,12 @@ pub enum ToRimuError {
     SerdeValue(#[from] SerdeValueError),
 }
 
+/// Serialize any `Serialize` type into a Rimu [`Spanned<Value>`].
+///
+/// The resulting value gets a synthetic zero-width span attributed to `source_id`,
+/// since the data originated from Rust rather than a parsed source file. This is
+/// how Rust-side structs (e.g. the detected `System` info) are injected into plan
+/// scripts as function arguments.
 pub fn to_rimu<T>(value: T, source_id: SourceId) -> Result<Spanned<Value>, ToRimuError>
 where
     T: Serialize,

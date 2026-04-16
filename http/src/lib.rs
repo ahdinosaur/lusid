@@ -1,3 +1,9 @@
+//! Thin HTTP client for fetching remote artifacts during plan apply.
+//!
+//! Wraps `reqwest` with sensible defaults (gzip/brotli, read timeout) and exposes
+//! a streaming `download_file` that writes through a `.tmp` sidecar and renames on
+//! success — so partial downloads never appear as completed files.
+
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
@@ -62,6 +68,15 @@ impl HttpClient {
         Ok(size)
     }
 
+    /// Stream a URL to a file on disk.
+    ///
+    /// If `file_path` already exists, this is a no-op — the URL is trusted to be
+    /// content-stable. The download is staged to a `.tmp` sidecar and atomically
+    /// renamed on success, so interrupted runs don't leave a half-written file
+    /// masquerading as complete.
+    ///
+    /// Note(cc): no retry, resume, or content verification (checksum, etag) yet.
+    /// If the URL changes under us, we'll silently use the stale local copy.
     pub async fn download_file<P: AsRef<Path>>(
         &self,
         url: &str,

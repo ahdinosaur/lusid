@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::View;
 
+/// Concatenation of views with no separator or container. Useful for building
+/// up a view incrementally or returning "nothing" (empty children) without
+/// needing an `Option<View>`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fragment {
     pub children: Vec<View>,

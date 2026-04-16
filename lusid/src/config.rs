@@ -1,3 +1,8 @@
+//! `lusid.toml` deserialization. Splits into an on-disk `ConfigToml`
+//! (deserialized straight from TOML) and an in-memory [`Config`] where plan
+//! paths have been resolved to absolute, CLI/env overrides have been
+//! applied, and defaults filled in.
+
 use comfy_table::Table;
 use lusid_machine::Machine;
 use lusid_system::Hostname;
@@ -55,6 +60,9 @@ struct ConfigToml {
     pub lusid_apply_linux_aarch64_path: Option<String>,
 }
 
+/// Resolved configuration. `path` is the original config file location
+/// (used to derive `root()`, the plan-resolution base). `machines` map is
+/// keyed by the TOML section name.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub path: PathBuf,
@@ -72,6 +80,9 @@ struct MachineConfigToml {
     pub params: Option<Value>,
 }
 
+/// Per-machine entry. `plan` is already resolved to an absolute path (see
+/// [`Config::resolve_plan_path`]); `params` is a raw TOML value that will
+/// be converted to JSON and handed to `lusid-apply --params`.
 #[derive(Debug, Clone)]
 pub struct MachineConfig {
     pub machine: Machine,
@@ -122,6 +133,9 @@ impl Config {
             })
     }
 
+    /// Look up the machine whose hostname matches the host we're running on.
+    /// Used by `local apply` — the user doesn't specify which machine to
+    /// apply, we infer it. Errors if no configured machine matches.
     pub fn local_machine(&self) -> Result<MachineConfig, ConfigError> {
         let hostname = Hostname::get().map_err(ConfigError::GetHostname)?;
         self.machines

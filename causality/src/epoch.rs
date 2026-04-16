@@ -22,8 +22,24 @@ pub enum EpochError<NodeId> {
     CycleDetected { remaining: usize },
 }
 
-/// Compute dependency layers of resource specs (Kahn's algorithm).
-/// Returns a list of epochs (layers), each epoch is a Vec<Node>.
+/// Flatten a causality tree into topologically-sorted dependency layers (epochs).
+///
+/// Uses Kahn's algorithm. Each returned epoch is a `Vec<Node>` whose members have no
+/// remaining dependencies within the graph, so they can be applied concurrently.
+///
+/// # Semantics
+///
+/// - Branch-level `requires` / `required_by` / `id` flow down to every descendant leaf.
+/// - Leaves wrapped in `None` are carried through the dependency graph (for their id
+///   references) but dropped from the output — useful as pure "marker" nodes.
+/// - Returns an empty epoch-free output if the input tree has no leaves.
+///
+/// # Errors
+///
+/// - [`EpochError::DuplicateId`] if any id appears twice across the tree.
+/// - [`EpochError::UnknownRequiresRef`] / [`EpochError::UnknownRequiredByRef`] if a
+///   `requires` / `required_by` entry references an id that wasn't declared.
+/// - [`EpochError::CycleDetected`] if the dependency graph contains a cycle.
 pub fn compute_epochs<Node, NodeId>(
     tree: CausalityTree<Option<Node>, NodeId>,
 ) -> Result<Vec<Vec<Node>>, EpochError<NodeId>>
@@ -38,6 +54,10 @@ where
         required_by: Vec<NodeId>,
     }
 
+    // Flatten the tree into a list of leaves, each with their *effective* requires/
+    // required_by (ancestor branches' constraints merged in). A parallel map
+    // `id_to_leaves` records which leaf indices a given id refers to; for branch ids
+    // this is the set of all descendant leaves.
     let mut leaves: Vec<CollectedLeaf<Node, NodeId>> = Vec::new();
     let mut id_to_leaves: HashMap<NodeId, Vec<usize>> = HashMap::new();
     let mut seen_ids: HashSet<NodeId> = HashSet::new();
@@ -151,7 +171,9 @@ where
         &mut leaves,
     )?;
 
-    // Build adjacency and indegrees (Kahn's algorithm)
+    // Build the DAG. Each `requires` edge points from target → this leaf (so this
+    // leaf's indegree goes up); each `required_by` edge points from this leaf →
+    // target (so target's indegree goes up). Both directions feed Kahn's algorithm.
     let n = leaves.len();
     let mut outgoing: Vec<Vec<usize>> = vec![Vec::new(); n];
     let mut indegree: Vec<usize> = vec![0; n];
@@ -220,3 +242,7 @@ where
 
     Ok(epochs)
 }
+
+// Note(cc): branch-level `requires` inflates the edge count — a branch with k leaves
+// whose `requires: [X]` resolves to m leaves produces k * m edges. Fine in practice for
+// plan-sized inputs, but worth knowing before scaling this to huge trees.

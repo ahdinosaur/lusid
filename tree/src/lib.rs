@@ -1,21 +1,38 @@
-//! Generic nested and flat tree representations with mapping helpers.
+//! Generic nested and flat tree data structures used throughout lusid.
 //!
-//! Assumptions for FlatTree:
-//! - Root index is always 0.
-//! - Nodes are stored in a Vec<Option<Node>>; missing children (None) or
-//!   out-of-bounds indices are tolerated by lenient reconstruction.
-//! - When replacing a subtree at an index, existing descendants are removed
-//!   (recursively set to None), and new children are appended at the end.
-//! - Depth-first traversal uses post-order (children before parent).
+//! Provides two representations:
 //!
-//! Conversions:
-//! - From<Tree> to FlatTree always creates the root at index 0.
-//! - From<FlatTree> to Tree is lenient: missing children are skipped; if the
-//!   root is missing, returns an empty Branch with default Meta.
+//! - [`Tree`]: A recursive nested tree. Each node is either a `Branch` (with children) or
+//!   a `Leaf` (with a value). Both carry a `Meta` payload. Used where recursive structure
+//!   is natural (e.g. plan items before flattening).
+//!
+//! - [`FlatTree`]: An arena-backed flat tree (`Vec<Option<FlatTreeNode>>`). Nodes reference
+//!   children by index. The `Option` layer allows tombstoning — nodes can be removed by
+//!   setting their slot to `None` without shifting indices.
+//!
+//! The async `map` family on `FlatTree` accept `write_start`/`write_update` callbacks,
+//! which is how the streaming TUI protocol gets progress updates during tree transformations.
+//!
+//! # FlatTree invariants
+//!
+//! - Root is always at index 0.
+//! - Missing children (None slots or out-of-bounds indices) are tolerated by lenient
+//!   reconstruction.
+//! - Replacing a subtree recursively clears existing descendants first, then appends
+//!   new children at the end of the arena.
+//! - Depth-first traversal is post-order (children before parent).
+//!
+//! # Conversions
+//!
+//! - `Tree → FlatTree`: root lands at index 0.
+//! - `FlatTree → Tree`: lenient — missing children are skipped; if the root itself is
+//!   missing, returns an empty `Branch` with `Meta::default()`.
 
 use std::future::Future;
 use thiserror::Error;
 
+/// Recursive nested tree. Either a `Branch` with children or a `Leaf` with a value,
+/// each carrying a `Meta` payload.
 #[derive(Debug, Clone)]
 pub enum Tree<Node, Meta> {
     Branch {
@@ -29,6 +46,7 @@ pub enum Tree<Node, Meta> {
 }
 
 impl<Node, Meta> Tree<Node, Meta> {
+    /// Construct a branch node from metadata and an iterable of children.
     pub fn branch(meta: Meta, children: impl IntoIterator<Item = Tree<Node, Meta>>) -> Self {
         Self::Branch {
             meta,
@@ -36,6 +54,7 @@ impl<Node, Meta> Tree<Node, Meta> {
         }
     }
 
+    /// Construct a leaf node from metadata and a value.
     pub fn leaf(meta: Meta, node: Node) -> Self {
         Self::Leaf { meta, node }
     }
@@ -48,6 +67,8 @@ impl<Node, Meta> Tree<Node, Meta> {
         matches!(self, Tree::Branch { .. })
     }
 
+    /// A tree is "empty" when it contains no leaves — i.e. every branch contains only
+    /// empty branches. A leaf is never empty.
     pub fn is_empty(&self) -> bool {
         match self {
             Tree::Branch { children, .. } => children.iter().all(|child| child.is_empty()),
@@ -55,6 +76,7 @@ impl<Node, Meta> Tree<Node, Meta> {
         }
     }
 
+    /// Transform leaf values, preserving structure and metadata.
     pub fn map<NextNode, MapFn>(self, map: MapFn) -> Tree<NextNode, Meta>
     where
         MapFn: Fn(Node) -> NextNode + Copy,
@@ -74,6 +96,7 @@ impl<Node, Meta> Tree<Node, Meta> {
         }
     }
 
+    /// Transform metadata on all nodes, preserving structure and leaf values.
     pub fn map_meta<NextMeta, MapFn>(self, map: MapFn) -> Tree<Node, NextMeta>
     where
         MapFn: Fn(Meta) -> NextMeta + Copy,
@@ -94,12 +117,16 @@ impl<Node, Meta> Tree<Node, Meta> {
     }
 }
 
+/// A single node in a [`FlatTree`]. Branches store child indices; leaves store values.
 #[derive(Debug, Clone)]
 pub enum FlatTreeNode<Node, Meta> {
     Branch { meta: Meta, children: Vec<usize> },
     Leaf { meta: Meta, node: Node },
 }
 
+/// Arena-backed flat tree. Nodes are stored in a `Vec<Option<...>>` where indices serve
+/// as node identifiers. `None` slots are tombstones — previously occupied positions that
+/// have been cleared (e.g. after a subtree replacement).
 #[derive(Debug, Clone)]
 pub struct FlatTree<Node, Meta> {
     nodes: Vec<Option<FlatTreeNode<Node, Meta>>>,
@@ -124,10 +151,12 @@ where
         0
     }
 
+    /// Returns the root node, or `None` if the tree is empty.
     pub fn root(&self) -> Option<&FlatTreeNode<Node, Meta>> {
         self.nodes.first()?.as_ref()
     }
 
+    /// Iterates leaf values in arena order (not traversal order).
     pub fn leaves(&self) -> impl Iterator<Item = &Node> {
         self.nodes.iter().filter_map(|node| match node {
             Some(FlatTreeNode::Branch { .. }) => None,
@@ -155,10 +184,16 @@ where
         node.as_mut().ok_or(FlatTreeError::NodeMissing(index))
     }
 
+    /// Append a nested tree to the arena. Returns the index of the tree's root.
     pub fn append_tree(&mut self, tree: Tree<Node, Meta>) -> usize {
         append_tree_nodes(&mut self.nodes, tree)
     }
 
+    /// Replace the subtree rooted at `root_index`. Existing descendants are cleared
+    /// (their slots set to `None`), and the new subtree is installed in place, with
+    /// any new children appended to the end of the arena.
+    ///
+    /// Passing `tree = None` just clears the subtree without installing a replacement.
     pub fn replace_tree(&mut self, tree: Option<Tree<Node, Meta>>, root_index: usize) {
         replace_tree_nodes(&mut self.nodes, tree, root_index)
     }
@@ -216,6 +251,10 @@ where
     Node: Clone,
     Meta: Clone,
 {
+    /// Transform every leaf synchronously, emitting a `write_update` event per leaf.
+    ///
+    /// The callback lets callers stream progress (used by `lusid-apply` to emit JSON
+    /// updates as the tree is transformed).
     pub async fn map<NextNode, Error, MapFn, WriteUpdateFn, WriteUpdateFut>(
         self,
         map: MapFn,
@@ -247,6 +286,9 @@ where
         Ok(FlatTree { nodes: next_nodes })
     }
 
+    /// Like [`map`](Self::map), but leaves can be dropped by returning `None`.
+    /// After mapping, branches that end up with no remaining reachable children are
+    /// also dropped (post-order sweep).
     pub async fn map_option<NextNode, Error, MapFn, WriteUpdateFn, WriteUpdateFut>(
         self,
         map: MapFn,
@@ -297,6 +339,11 @@ where
         Ok(result)
     }
 
+    /// Expand each leaf into a (possibly nested) subtree. The leaf's slot becomes the
+    /// new subtree's root, and any extra nodes are appended to the arena.
+    ///
+    /// This is how the plan crate recursively expands plan-item leaves into resource
+    /// branches.
     pub async fn map_tree<NextNode, Error, MapFn, WriteFut, WriteUpdateFn>(
         self,
         map: MapFn,
@@ -325,6 +372,10 @@ where
         Ok(FlatTree { nodes: next_nodes })
     }
 
+    /// Async, fallible leaf transform with start/update callbacks.
+    ///
+    /// `write_start` fires before the leaf's `map` future runs (useful for UI: "this
+    /// operation is now running"); `write_update` fires after it resolves.
     pub async fn map_result_async<
         NextNode,
         Error,
@@ -370,6 +421,8 @@ where
         Ok(FlatTree { nodes: next_nodes })
     }
 
+    /// Async, fallible subtree-expansion variant of [`map_tree`](Self::map_tree).
+    /// Each leaf can asynchronously produce a full subtree.
     pub async fn map_tree_result_async<
         NextNode,
         Error,
@@ -440,6 +493,14 @@ fn append_tree_nodes<Node, Meta>(
     }
 }
 
+// Core subtree replacement. First recursively tombstones any existing descendants of
+// `root_index` (so they don't dangle), then installs the new content. When the new tree
+// is a branch, its children are appended to the end of the arena — meaning the new
+// root keeps its slot but descendants live at fresh indices.
+//
+// Note(cc): the `None` branch below grows the arena just to immediately write `None`
+// into the new slot. That's a no-op (default-extended slots are already `None`) but
+// harmless; kept explicit so intent is obvious.
 fn replace_tree_nodes<Node, Meta>(
     nodes: &mut Vec<Option<FlatTreeNode<Node, Meta>>>,
     tree: Option<Tree<Node, Meta>>,

@@ -1,3 +1,9 @@
+//! Platform-specific directories (data/cache/runtime) for lusid.
+//!
+//! On Linux follows the XDG Base Directory spec; on macOS uses `~/Library` conventions;
+//! on Windows uses `%LOCALAPPDATA%` / `%TEMP%`. Each directory is suffixed with the
+//! project name.
+//
 // Inspiration: https://github.com/cubic-vm/cubic/blob/68566f79d72e2037bce1b75246d92e6da7b999e5/src/env/environment_factory.rs
 
 use std::{
@@ -8,6 +14,8 @@ use thiserror::Error;
 
 const PROJECT_NAME: &str = "lusid";
 
+/// Platform-specific directory bundle for lusid: persistent data, transient cache,
+/// and runtime (sockets / pid files) roots.
 #[derive(Debug, Clone)]
 pub struct Paths {
     data_dir: PathBuf,
@@ -38,6 +46,9 @@ impl Paths {
         let cache_dirs: PathBuf = Self::var("XDG_CACHE_HOME")
             .or_else(|_| Self::var("HOME").map(|home| format!("{home}/.cache")))
             .map(From::from)?;
+        // TODO(cc): `UID` is a shell variable — it's set in bash/zsh but not usually
+        // exported, so this fallback often fails. Prefer `nix::unistd::getuid()` (already
+        // a workspace dep) to look up the real uid.
         let runtime_dirs: PathBuf = Self::var("XDG_RUNTIME_DIR")
             .or_else(|_| Self::var("UID").map(|uid| format!("/run/user/{uid}")))
             .map(From::from)?;

@@ -1,3 +1,9 @@
+//! Identifiers for plans and their internal nodes.
+//!
+//! - [`PlanId`] — where to find a plan (local path or, eventually, a git URL).
+//! - [`PlanNodeId`] — how to name a specific node inside a planned tree for causality
+//!   references (`requires` / `required_by`).
+
 use lusid_store::StoreItemId;
 use lusid_view::impl_display_render;
 use rimu::SourceId;
@@ -7,6 +13,8 @@ use std::{
 };
 use url::Url;
 
+/// Location of a plan source. `PlanId::Git` is declared but not yet wired through the
+/// store (see the `From<PlanId> for StoreItemId` impl below).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PlanId {
     Path(PathBuf),
@@ -14,6 +22,10 @@ pub enum PlanId {
 }
 
 impl PlanId {
+    /// Resolve a child plan reference against this plan's directory.
+    ///
+    /// `self` is treated as a file path; the child is joined against the file's parent
+    /// directory. So joining `"foo/bar.lusid"` with `"baz.lusid"` yields `"foo/baz.lusid"`.
     pub fn join<P: AsRef<Path>>(&self, path: P) -> PlanId {
         match self {
             PlanId::Path(current_path) => PlanId::Path(relative(current_path, path)),
@@ -23,6 +35,7 @@ impl PlanId {
         }
     }
 
+    /// The local filesystem path, if this plan is a local file. `None` for `Git`.
     pub fn as_path(self) -> Option<PathBuf> {
         match self {
             PlanId::Path(path) => Some(path),
@@ -51,6 +64,9 @@ impl From<PlanId> for StoreItemId {
     fn from(value: PlanId) -> Self {
         match value {
             PlanId::Path(path) => StoreItemId::LocalFile(path),
+            // TODO(cc): wire `PlanId::Git` through the store. The rest of the pipeline
+            // already accepts it (SourceId, diagnostics, etc.) — the missing piece is
+            // a Git-aware `StoreItemId` variant.
             PlanId::Git(_url, _path) => todo!(),
         }
     }
@@ -69,6 +85,13 @@ impl From<PlanId> for SourceId {
     }
 }
 
+/// Identifier for any node in a planned tree.
+///
+/// - `Plan` — the root of a plan.
+/// - `PlanItem` — a plan item declared with a user-authored `id` (scoped by plan).
+/// - `SubItem` — an id minted *inside* a resource's expansion (e.g. the `"file"` id used
+///   by `file` to order mode/user/group atoms). Scoped by a fresh `cuid2` so the
+///   inner ids can never collide across resources.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum PlanNodeId {
     Plan(PlanId),

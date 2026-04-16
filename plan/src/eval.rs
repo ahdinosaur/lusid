@@ -1,3 +1,5 @@
+//! Evaluate a plan's `setup(params, system)` Rimu function into a list of `PlanItem`s.
+
 use displaydoc::Display;
 use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};
 use lusid_system::System;
@@ -25,6 +27,12 @@ pub enum EvalError {
     InvalidPlanItem(Box<Spanned<IntoPlanItemError>>),
 }
 
+/// Call the plan's `setup` function with `(params, system)` and parse its returned list
+/// into [`PlanItem`]s.
+///
+/// `params_value` is `None` when the caller provided no params — in that case the first
+/// arg is `Null` (rather than e.g. an empty object, to match what a plan's `setup` sees
+/// for "no params given").
 pub(crate) fn evaluate(
     setup: Spanned<SetupFunction>,
     params_value: Option<Spanned<Value>>,

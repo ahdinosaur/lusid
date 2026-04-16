@@ -235,7 +235,10 @@ impl ResourceType for Git {
             });
         }
 
-        // Get whether git repo at path is dirty
+        // Get whether git repo at path is dirty.
+        // Note(cc): a dirty working tree without `force` surfaces as a state error (not a
+        // no-op): the intent is to refuse to touch user changes. `force: true` carries the
+        // dirty flag forward into `change_for_present` where it gates pull/checkout.
         let status = git_run(resource, ["status", "--porcelain"]).await?;
         let is_dirty = !status.is_empty();
         if is_dirty && !resource.force {

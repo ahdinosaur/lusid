@@ -1,4 +1,5 @@
-//! Load Rimu source into a Plan (spanned).
+//! Parse `.lusid` Rimu source into a [`Plan`] value (with spans preserved for
+//! diagnostics).
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -27,6 +28,11 @@ pub enum LoadError {
     PlanFromRimu(Box<Spanned<PlanFromRimuError>>),
 }
 
+/// Parse Rimu source, evaluate it against an empty environment, and project the
+/// resulting value into a [`Plan`] (name, version, params schema, setup function).
+///
+/// `plan_id` becomes the Rimu `SourceId` so downstream span-aware errors can point back
+/// at the real file.
 pub fn load(code: &str, plan_id: &PlanId) -> Result<Spanned<Plan>, LoadError> {
     let source_id = plan_id.clone().into();
     let (ast, errors) = rimu::parse(code, source_id);

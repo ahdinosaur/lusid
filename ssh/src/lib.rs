@@ -1,3 +1,18 @@
+//! Async SSH client for lusid's VM provisioning pipeline.
+//!
+//! Built on [`russh`]. Provides:
+//!
+//! - [`Ssh::connect`] — connect with retry + public key auth.
+//! - [`Ssh::command`] — run a remote command and tail stdout/stderr as
+//!   [`tokio::io::AsyncRead`] streams.
+//! - [`Ssh::sync`] — SFTP a local file / directory / bytes onto the remote.
+//! - [`Ssh::terminal`] — forward the current TTY to an interactive remote shell.
+//! - [`SshKeypair`] — create / load an ed25519 keypair on disk.
+//!
+//! Note(cc): host key verification is disabled (`NoCheckHandler`) because lusid
+//! currently SSHs only into VMs it has just booted. If/when lusid grows into
+//! arbitrary remote machines, this must be revisited.
+
 mod command;
 mod connect;
 mod keypair;

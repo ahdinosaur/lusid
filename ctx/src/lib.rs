@@ -1,3 +1,10 @@
+//! Shared runtime context passed through the planning and apply pipeline.
+//!
+//! A [`Context`] bundles things every stage needs: the plan root directory (used to
+//! resolve `HostPath` params relative to the source file), platform-specific data/cache
+//! paths ([`Paths`]), and a reusable HTTP client. Construct once per run and hand it
+//! down; prefer adding fields here over threading new arguments everywhere.
+
 mod paths;
 
 use std::path::{Path, PathBuf};
@@ -16,6 +23,7 @@ pub enum ContextError {
     Http(#[from] HttpError),
 }
 
+/// Runtime context for a lusid invocation — plan root, XDG paths, HTTP client.
 #[derive(Debug, Clone)]
 pub struct Context {
     root: PathBuf,

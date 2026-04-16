@@ -27,6 +27,8 @@ use crate::{
     utils::is_tcp_port_open,
 };
 
+/// Inputs for [`Vm::run`]: which instance to (re)use, what [`Machine`] image
+/// to run, and any additional guest ports to forward beyond SSH.
 pub struct VmOptions<'a> {
     pub instance_id: &'a str,
     pub machine: &'a Machine,
@@ -72,15 +74,23 @@ pub enum VmError {
     KillPid(#[source] nix::errno::Errno),
 }
 
+/// A configured (and usually running) VM instance. Serialized to
+/// `<instance_dir>/state.json` so that re-running with the same `instance_id`
+/// picks up the same overlay, keypair, and forwarded SSH port.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vm {
     pub id: String,
     pub dir: PathBuf,
     pub arch: Arch,
     pub linux: Linux,
+    /// Kernel `root=` cmdline arg (e.g. `/dev/vda3`); image-dependent.
     pub kernel_root: String,
+    /// Default SSH login user (e.g. `debian`); image-dependent.
     pub user: String,
     pub has_initrd: bool,
+    /// Host-side TCP port forwarded to the guest's port 22. Chosen once at
+    /// setup time via [`get_free_tcp_port`](crate::utils::get_free_tcp_port)
+    /// and persisted so reruns stay reachable at the same address.
     pub ssh_port: u16,
     pub memory_size: Option<MemorySize>,
     pub cpu_count: Option<CpuCount>,
@@ -90,6 +100,11 @@ pub struct Vm {
 }
 
 impl Vm {
+    /// Ensure a VM is set up, running, and accepting SSH.
+    ///
+    /// Idempotent: if `<instance_dir>/state.json` already exists it is loaded
+    /// instead of rebuilt, and qemu is only spawned if no `qemu.pid` is
+    /// present. Blocks until `127.0.0.1:<ssh_port>` answers.
     pub async fn run(ctx: &mut BaseContext, options: VmOptions<'_>) -> Result<Vm, VmError> {
         let mut ctx = Context::create(ctx)?;
 
@@ -163,6 +178,9 @@ impl Vm {
         Ok(())
     }
 
+    /// Delete the instance directory (overlay, OVMF vars, kernel, cloud-init,
+    /// keypair, state). The caller is responsible for [`stop`](Self::stop)ping
+    /// qemu first; removing a running instance's dir is undefined behaviour.
     pub async fn remove(self) -> Result<(), VmError> {
         fs::remove_dir(self.dir).await.map_err(VmError::RemoveDir)?;
         Ok(())
@@ -183,6 +201,12 @@ impl Vm {
         is_tcp_port_open(self.ssh_port)
     }
 
+    /// Kill the qemu process via `SIGKILL` on the pid stored in `qemu.pid`.
+    ///
+    /// Note(cc): this is an unconditional hard kill — no `SIGTERM` grace
+    /// period, no QMP `system_powerdown`. Fine for the dev workflow (overlay
+    /// disk absorbs the damage), but worth revisiting if guests ever carry
+    /// state worth flushing.
     pub async fn stop(&self) -> Result<(), VmError> {
         let pid_str = fs::read_file_to_string(&self.paths().qemu_pid_path())
             .await
@@ -193,6 +217,9 @@ impl Vm {
         Ok(())
     }
 
+    /// Load (or create on first call) the instance's ed25519 SSH keypair from
+    /// `<dir>/id_ed25519[.pub]`. Matches the public key seeded into the guest
+    /// by cloud-init, so SSH connections authenticate out of the box.
     pub async fn ssh_keypair(&self) -> Result<SshKeypair, VmError> {
         SshKeypair::load_or_create(&self.dir)
             .await
@@ -200,6 +227,8 @@ impl Vm {
     }
 }
 
+/// A host→guest TCP forward translated into a QEMU `hostfwd` rule. An omitted
+/// `host_ip` binds `0.0.0.0`; an omitted `host_port` reuses `vm_port`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VmPort {
     pub host_ip: Option<Ipv4Addr>,

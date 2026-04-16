@@ -1,3 +1,9 @@
+//! Current user info: `$USER` (or `$USERNAME` on Windows) plus `$HOME`.
+//!
+//! Note(cc): trusts env vars, which can be unset or spoofed. On Unix, `nix::unistd`
+//! already in the workspace would give the real uid → username lookup without needing
+//! the env to be set.
+
 use std::env;
 use std::path::PathBuf;
 

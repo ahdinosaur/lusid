@@ -1,3 +1,26 @@
+//! Resource types — the user-facing "thing I want on my machine" layer.
+//!
+//! Each resource (apt, file, pacman, command, git) describes one kind of managed
+//! system entity. The pipeline for every resource is the same five-step shape,
+//! captured by the [`ResourceType`] trait:
+//!
+//! 1. **Params** — friendly user-facing struct, deserialised from the plan's Rimu
+//!    value via the declared [`ParamTypes`] schema.
+//! 2. **Resource** — one or more "atoms" produced from Params. One apt
+//!    `packages: [a, b]` param expands to two atoms (one per package). Atoms are
+//!    arranged in a [`CausalityTree`] so resource-internal ordering can be declared.
+//! 3. **State** — current observed state for an atom (e.g. Installed/NotInstalled).
+//! 4. **Change** — the delta from State to the desired Resource. `None` means
+//!    "already matches".
+//! 5. **Operations** — the concrete actions (apt install, write file, etc.) derived
+//!    from the Change. Lives in the `lusid-operation` crate.
+//!
+//! The crate-level [`Resource`] / [`ResourceState`] / [`ResourceChange`] /
+//! [`ResourceParams`] enums are plain dispatchers — each variant boxes the per-type
+//! data and delegates through the trait. Adding a new resource means: writing a
+//! `ResourceType` impl, adding a variant to each of these enums, and threading it
+//! through the match arms.
+
 use std::fmt::Display;
 
 use crate::resources::file::FileParams;
@@ -23,50 +46,55 @@ use crate::resources::file::{File, FileChange, FileResource, FileState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 
-/// ResourceType:
-/// - ParamTypes for Rimu schema
-/// - Resource (atom)
-/// - State (current)
-/// - Change (delta needed)
-/// - Conversion from Change -> Operation(s)
+/// The full pipeline for a single resource type.
+///
+/// Implementors are zero-sized marker types (e.g. `Apt`, `File`); all the real data lives
+/// in the associated types. The flow for one plan item is:
+///
+/// `Params -> resources() -> State (via state()) -> change() -> operations()`
 #[async_trait]
 pub trait ResourceType {
+    /// Stable identifier used as the `@core/<ID>` module name in plans.
     const ID: &'static str;
 
-    /// Schema for resource params.
+    /// Rimu schema used to validate this resource's params. `None` means "no fields".
     fn param_types() -> Option<Spanned<ParamTypes>>;
 
-    /// Resource params (friendly user definition).
+    /// User-facing params struct (deserialised from the plan's Rimu value).
     type Params: Render + DeserializeOwned;
 
-    /// Resource atom (indivisible system definition).
+    /// Indivisible unit of managed state. One `Params` may produce many atoms (e.g. one
+    /// per package in a packages list).
     type Resource: Render;
 
-    /// Create resource atom from params.
+    /// Expand params into one or more resource atoms, organised as a causality tree so
+    /// intra-resource ordering (e.g. "chmod after write") can be declared via meta ids.
     fn resources(params: Self::Params) -> Vec<CausalityTree<Self::Resource>>;
 
-    /// Current state of resource on machine.
+    /// Observed state of a single atom on the target machine.
     type State: Render;
 
-    /// Possible error when fetching current state of resource on machine.
+    /// Failures that can occur while observing state (command exec, parse errors, etc.).
     type StateError;
 
-    /// Fetch current state of resource on machine.
+    /// Observe the current state of `resource` on the target machine.
     async fn state(
         ctx: &mut Context,
         resource: &Self::Resource,
     ) -> Result<Self::State, Self::StateError>;
 
-    /// A change from current state.
+    /// The delta from `State` to the desired `Resource`.
     type Change: Render;
 
-    /// Get change atomic resource from current state to intended state.
+    /// Compute the change needed to reach `resource` from `state`. `None` means no-op.
     fn change(resource: &Self::Resource, state: &Self::State) -> Option<Self::Change>;
 
-    // Convert atomic resource change into operations (mutations).
+    /// Lower a change into concrete operations (apt install, write file, …) to execute.
     fn operations(change: Self::Change) -> Vec<CausalityTree<Operation>>;
 }
 
+/// Dispatcher over every resource's `Params` variant. Produced by the planner from the
+/// `@core/<id>` module a plan item refers to.
 #[derive(Debug, Clone)]
 pub enum ResourceParams {
     Apt(AptParams),
@@ -102,6 +130,7 @@ impl Render for ResourceParams {
     }
 }
 
+/// Dispatcher over every resource's `Resource` atom.
 #[derive(Debug, Clone)]
 pub enum Resource {
     Apt(AptResource),
@@ -137,6 +166,10 @@ impl Render for Resource {
     }
 }
 
+/// Dispatcher over every resource's observed `State`.
+///
+/// Invariant: the variant always matches the originating `Resource` variant — see
+/// [`Resource::change`] for the enforcement point.
 #[derive(Debug, Clone)]
 pub enum ResourceState {
     Apt(AptState),
@@ -172,6 +205,8 @@ impl Render for ResourceState {
     }
 }
 
+/// Dispatcher over any per-resource `StateError`. The wrapped error carries the original
+/// span/context; the variant just tells you which resource family failed.
 #[derive(Error, Debug)]
 pub enum ResourceStateError {
     #[error("apt state error: {0}")]
@@ -187,6 +222,7 @@ pub enum ResourceStateError {
     Git(#[from] <Git as ResourceType>::StateError),
 }
 
+/// Dispatcher over every resource's `Change`.
 #[derive(Debug, Clone)]
 pub enum ResourceChange {
     Apt(AptChange),
@@ -223,6 +259,8 @@ impl Render for ResourceChange {
 }
 
 impl ResourceParams {
+    /// Expand params into resource atoms and lift each per-type tree into the
+    /// top-level [`Resource`] dispatcher.
     pub fn resources(self) -> Vec<CausalityTree<Resource>> {
         fn typed<R: ResourceType>(
             params: R::Params,
@@ -245,6 +283,8 @@ impl ResourceParams {
 }
 
 impl Resource {
+    /// Observe this atom on the target machine and return a [`ResourceState`] in the
+    /// matching variant.
     pub async fn state(&self, ctx: &mut Context) -> Result<ResourceState, ResourceStateError> {
         async fn typed<R: ResourceType>(
             ctx: &mut Context,
@@ -286,6 +326,10 @@ impl Resource {
         }
     }
 
+    /// Diff this atom against its observed state. `None` means "already correct".
+    ///
+    /// Panics if the state variant does not match the resource variant — this is a
+    /// programmer error since [`Self::state`] always returns the matching variant.
     pub fn change(&self, state: &ResourceState) -> Option<ResourceChange> {
         fn typed<R: ResourceType>(
             resource: &R::Resource,
@@ -295,7 +339,11 @@ impl Resource {
             R::change(resource, state).map(map)
         }
 
-        // TODO (mw): remove #[allow(unreachable_patterns)] once we have more resources
+        // Note(cc): the `#[allow(unreachable_patterns)]` dates from when only one
+        // resource existed and the `_` arm really was unreachable. With five variants
+        // the `_` arm is reachable (e.g. `(Resource::Apt, ResourceState::File)`) and
+        // the allow is likely stale — leaving it for now to avoid churn, but it can
+        // probably be removed.
         #[allow(unreachable_patterns)]
         match (self, state) {
             (Resource::Apt(resource), ResourceState::Apt(state)) => {
@@ -322,6 +370,8 @@ impl Resource {
 }
 
 impl ResourceChange {
+    /// Lower a change into the concrete operations that execute it, preserving any
+    /// intra-change ordering (e.g. `apt update` before `apt install`).
     pub fn operations(self) -> Vec<CausalityTree<Operation>> {
         match self {
             ResourceChange::Apt(change) => Apt::operations(change),

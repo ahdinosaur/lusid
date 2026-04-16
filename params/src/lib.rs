@@ -1,4 +1,31 @@
-//! Parameter schemas and values.
+//! Parameter schemas and values for lusid plans.
+//!
+//! Every plan and every core module declares a `params` schema. This crate defines
+//! the three pieces of that system:
+//!
+//! - **[`ParamType`] / [`ParamField`] / [`ParamTypes`]**: the schema — what shape
+//!   of value is accepted (struct or union-of-structs, each with typed fields).
+//! - **[`ParamValue`] / [`ParamValues`]**: the parsed, typed value side.
+//! - **[`validate`]**: type-checks a Rimu value object against a schema.
+//!
+//! # Spans are load-bearing
+//!
+//! Schemas, values, and errors are all `Spanned<T>`. That's how diagnostics point
+//! back at the offending line in the user's `.lusid` file. When adding a new type
+//! or error variant, keep the span all the way through.
+//!
+//! # Path-type conventions (see also AGENTS.md)
+//!
+//! - [`ParamType::HostPath`]: a **relative** string, resolved against the source
+//!   file's directory at value-conversion time (via [`rimu::Span::source`]).
+//! - [`ParamType::TargetPath`]: an **absolute** string, used as-is on the managed
+//!   machine.
+//!
+//! # Union semantics
+//!
+//! A [`ParamTypes::Union`] is a list of struct cases. Validation is **first-match**:
+//! cases are tried in declaration order, and the first one that validates wins —
+//! so authors should order from most-specific to most-general.
 
 use std::path::{Path, PathBuf};
 
@@ -11,6 +38,14 @@ use rimu_interop::{FromRimu, ToRimuError};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
+/// Schema node: the allowed shape of a single value.
+///
+/// - `Literal` matches an exact Rimu value (used to discriminate union cases on a
+///   specific `type: "foo"` field).
+/// - `List` / `Object` are homogeneous containers — every element/value matches
+///   the inner type.
+/// - `HostPath` / `TargetPath` are `String` at the Rimu level but carry stricter
+///   semantics (relative vs absolute; see module docs).
 #[derive(Debug, Clone)]
 pub enum ParamType {
     Literal(Value),
@@ -53,16 +88,25 @@ impl ParamField {
     }
 }
 
+/// Ordered map of field name → field schema. `IndexMap` is deliberate — we preserve
+/// declaration order for stable diagnostics and rendering.
 pub type ParamsStruct = IndexMap<String, Spanned<ParamField>>;
 
+/// Top-level schema: either a single struct, or a union of candidate structs.
 #[derive(Debug, Clone)]
 pub enum ParamTypes {
-    // A single object structure: keys -> fields
+    /// A single object structure: keys -> fields
     Struct(ParamsStruct),
-    // A union of possible object structures.
+    /// A union of possible object structures. Validation tries cases in order
+    /// and returns the first that matches (see module docs).
     Union(Vec<ParamsStruct>),
 }
 
+/// A parameter value after type-directed conversion.
+///
+/// Mirrors [`ParamType`] variants but holds a concrete value. Notably,
+/// `HostPath` becomes a fully-resolved absolute [`PathBuf`], so downstream
+/// consumers never need to know where the source file lived.
 #[derive(Debug, Clone)]
 pub enum ParamValue {
     Literal(Value),
@@ -194,6 +238,11 @@ impl ParamValue {
                 Ok(ParamValue::Object(object))
             }
             (ParamType::HostPath, Value::String(value)) => {
+                // HostPath: a relative string, resolved against the source file's
+                // directory so `source: "./gitconfig"` in `~/plans/foo.lusid` becomes
+                // `~/plans/gitconfig`. This is why Rimu spans must carry a filesystem
+                // source id — without a parent directory we'd have nowhere to resolve
+                // against.
                 let value_path = PathBuf::from(value);
                 let source_path = PathBuf::from(span.source().as_str());
                 let source_dir_path = source_path.parent();
@@ -217,6 +266,8 @@ impl ParamValue {
     }
 }
 
+/// Map of parameter name → typed value. Wraps [`IndexMap`] to preserve declaration
+/// order for stable rendering and iteration.
 #[derive(Debug, Clone, Default)]
 pub struct ParamValues(IndexMap<String, Spanned<ParamValue>>);
 
@@ -444,9 +495,10 @@ pub enum ParamTypesFromRimuError {
 impl FromRimu for ParamTypes {
     type Error = ParamTypesFromRimuError;
 
-    // In Rimu:
-    // - An object defines a Struct (map of fields).
-    // - A list defines a Union; each list item is an object defining one case.
+    /// Parse a schema declaration in the plan:
+    /// - An **object** defines a [`ParamTypes::Struct`] — the map of fields.
+    /// - A **list** defines a [`ParamTypes::Union`] — each item is an object
+    ///   defining one candidate case (first-match wins during validation).
     fn from_rimu(value: Value) -> Result<Self, Self::Error> {
         match value {
             Value::Object(map) => {
@@ -710,8 +762,17 @@ fn validate_struct(
     }
 }
 
-// For Struct: validate all fields.
-// For Union: succeed if any one case validates; otherwise return all case errors.
+/// Validate parameter values against a schema.
+///
+/// - `Struct` schemas must match all fields exactly (required fields present,
+///   unknown fields rejected, each value the right type).
+/// - `Union` schemas succeed on the first case that validates; if none match,
+///   all per-case errors are returned together so users can see why each case
+///   failed.
+///
+/// Returns the matching [`ParamsStruct`] on success (useful to downstream code
+/// that needs to know which union case won), or `None` when both types and
+/// values are absent (a valid "parameterless" plan).
 pub fn validate(
     param_types: Option<&Spanned<ParamTypes>>,
     param_values: Option<&Spanned<Value>>,

@@ -3,6 +3,9 @@ use std::fmt::Display;
 
 use crate::TextStyle;
 
+/// A run of text with uniform styling. The atomic unit of the view system:
+/// [`Line`](crate::Line)s are `Vec<Span>`, so a line can mix colours and
+/// weights without nesting.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Span {
     pub content: String,

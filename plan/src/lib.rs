@@ -1,3 +1,20 @@
+//! Planning: turn a `.lusid` plan (written in Rimu) into a tree of typed resource params.
+//!
+//! The entry point is [`plan`]. Given a root [`PlanId`] (local path, eventually also git),
+//! optional Rimu params, and a reference to the current [`System`], it:
+//!
+//! 1. Reads the plan source from the [`Store`].
+//! 2. Parses + evaluates Rimu into a [`Plan`] (via [`load::load`]).
+//! 3. Validates user params against the plan's `params` schema.
+//! 4. Invokes the plan's `setup(params, system)` function to get a list of `PlanItem`s.
+//! 5. For each item, either:
+//!    - If `module` starts with `@core/<id>` → convert to [`ResourceParams`] (a leaf).
+//!    - Otherwise → resolve the module as a sibling `.lusid` file, recurse, and attach
+//!      as a subtree (a branch).
+//!
+//! The result is a [`PlanTree<ResourceParams>`] whose branch/leaf metadata carries the
+//! [`PlanNodeId`] identifiers used by causality scheduling downstream.
+
 use displaydoc::Display;
 use lusid_params::{ParamValuesFromRimuError, ParamsValidationError, validate};
 use lusid_resource::ResourceParams;
@@ -48,8 +65,10 @@ pub enum PlanError {
     PlanItemToResource(#[from] PlanItemToResourceError),
 }
 
-/// Top-level planning routine: load plan, validate parameters, and evaluate to
-/// a CausalityTree<Resource>.
+/// Plan a `.lusid` file recursively, producing a tree of typed resource params.
+///
+/// Wraps the recursive subplan in a root [`PlanTree::Branch`] with default metadata so
+/// callers always get a tree (never a bare list).
 #[tracing::instrument(skip_all)]
 pub async fn plan(
     plan_id: PlanId,
@@ -67,6 +86,8 @@ pub async fn plan(
     Ok(tree)
 }
 
+/// Inner recursive routine. Each call handles exactly one `.lusid` source: load, validate
+/// params, evaluate `setup`, and convert each returned item into a subtree.
 async fn plan_recursive(
     plan_id: PlanId,
     params_value: Option<&Spanned<Value>>,
@@ -125,6 +146,9 @@ pub enum PlanItemToResourceError {
     PlanSubtree(#[from] Box<PlanError>),
 }
 
+/// Lower a single `PlanItem` to a subtree. Core modules produce a leaf with
+/// [`ResourceParams`]; every other module name is treated as a path relative to the
+/// parent plan and recursed into as a branch.
 async fn plan_item_to_resource(
     plan_item: Spanned<crate::model::PlanItem>,
     current_plan_id: &PlanId,

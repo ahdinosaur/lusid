@@ -1,3 +1,26 @@
+//! Thin wrapper around [`tokio::process::Command`] that lusid operations use to shell
+//! out (apt, pacman, file ownership changes, user command resources, …).
+//!
+//! Why wrap it at all:
+//! - Boolean `stdout` / `stderr` knobs that toggle between piped (captured) and
+//!   inherited (streamed directly to the parent's stdio).
+//! - A [`Command::sudo`] helper that rewraps the command under `sudo -n`, preserving
+//!   explicitly-set env vars and the working directory.
+//! - Uniform `CommandError` variants for the common failure modes.
+//! - [`Command::handle`] for commands where a non-zero exit is meaningful (e.g. the
+//!   `command` resource's `is_installed` check), not strictly an error.
+//! - [`Command::from_str`] parses shell-style argument strings via `shell-words`, so
+//!   plan authors can write a single string instead of a vector.
+//
+// TODO(cc): `async-promise` is declared in `Cargo.toml` but not used anywhere in this
+// crate — it's only used by `lusid-ssh`. Drop it from this manifest.
+//
+// TODO(cc): this crate uses `tokio::io::{AsyncReadExt, AsyncWriteExt}` but doesn't enable
+// tokio's `io-util` feature locally. It currently compiles only because another workspace
+// member (e.g. `lusid-http`) turns that feature on, and Cargo feature-unification leaks it
+// here. `cargo check -p lusid-cmd` in isolation fails. Add `io-util` to the crate's own
+// `tokio` feature list.
+
 use std::ffi::{OsStr, OsString};
 use std::fmt::Display;
 use std::path::Path;
@@ -49,6 +72,9 @@ pub struct Command {
 }
 
 impl Display for Command {
+    // Note(cc): `to_str().unwrap()` here will panic on non-UTF-8 program/args (rare on
+    // modern Linux, impossible on strings that came in from Rimu, but still a sharp
+    // edge). Switch to `to_string_lossy()` if this ever fires.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let cmd = self.cmd.as_std();
         let program = cmd.get_program().to_str().unwrap();
@@ -112,11 +138,14 @@ impl Command {
         self
     }
 
+    /// If `true`, the child's stdout is inherited from the parent (streamed live);
+    /// if `false`, it is piped so the parent can capture it. Default: `false`.
     pub fn stdout(&mut self, stdout: bool) -> &mut Command {
         self.stdout = stdout;
         self
     }
 
+    /// Same semantics as [`stdout`](Self::stdout) but for the stderr stream.
     pub fn stderr(&mut self, stderr: bool) -> &mut Command {
         self.stderr = stderr;
         self
@@ -130,6 +159,10 @@ impl Command {
         self.stderr
     }
 
+    /// Rewrap this command as `sudo -n <program> <args>`, preserving explicitly-set
+    /// env vars (passed as `KEY=VALUE` args so sudo forwards them) and the working
+    /// directory. The `-n` flag makes sudo fail fast rather than block for a password
+    /// prompt — lusid operations must be non-interactive.
     pub fn sudo(self) -> Self {
         let mut privileged_cmd = Command::new("sudo");
 
@@ -218,6 +251,8 @@ impl Command {
         })
     }
 
+    /// Run the command to completion, returning captured stdout on success or a
+    /// [`CommandError::Failure`] (with stderr attached) on non-zero exit.
     pub async fn run(&mut self) -> Result<Vec<u8>, CommandError> {
         let mut output = self.output().await?;
         let status = output.status.await?;
@@ -243,6 +278,13 @@ impl Command {
         }
     }
 
+    /// Run with pluggable success/failure handlers. Use this when a non-zero exit
+    /// carries meaning — e.g. the `command` resource's `is_installed` check probes
+    /// a boolean via exit code, not via error.
+    ///
+    /// If `stderr_handler` returns `Ok(Some(value))` the exit is treated as a success;
+    /// `Ok(None)` falls through to [`CommandError::Failure`]. The outer `Result` is for
+    /// I/O failures, the inner `Result` for domain-level handler errors.
     pub async fn handle<OutHandler, ErrHandler, HandlerValue, HandlerError>(
         &mut self,
         stdout_handler: OutHandler,
@@ -298,6 +340,8 @@ impl FromStr for Command {
 }
 
 impl Command {
+    /// Wrap a shell string as `sh -c "<command>"`. Use when the plan author wants
+    /// shell features (pipes, globs, `&&`); prefer structured args otherwise.
     pub fn new_sh(command: &str) -> Self {
         let mut cmd = Command::new("sh");
         cmd.arg("-c");

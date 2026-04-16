@@ -1,3 +1,11 @@
+//! Guest image catalogue, download, and hash verification.
+//!
+//! The catalogue is a static `images.toml` (compiled in via `include_str!`)
+//! mapping `(arch, os)` pairs to a download URL and a checksum URL (SHA-256
+//! or SHA-512 SUMS file). [`get_image`] picks the row matching the requested
+//! [`Machine`], downloads both files into `cache_dir/vm/images/` if absent,
+//! verifies the hash, and returns a [`VmImage`] pointing at the cached file.
+
 use lusid_fs::{self as fs, FsError};
 use lusid_http::HttpError;
 use lusid_machine::Machine;
@@ -50,6 +58,10 @@ pub struct VmImage {
 }
 
 impl VmImage {
+    // Note(cc): VMs are Linux-only today. The `Os::Linux(_)` narrowing is
+    // deliberate — the `_ => unimplemented!()` arm would fire if `images.toml`
+    // ever lists a non-Linux `os:` value, which isn't a supported state. If
+    // FreeBSD/etc. guests are ever added, this needs a real error path.
     pub fn new(paths: &Paths, image_index: VmImageIndex) -> Self {
         let image_path = paths.image_file(&image_index.to_image_file_name());
         let VmImageIndex {
@@ -78,6 +90,10 @@ impl VmImage {
 pub async fn get_image(ctx: &mut Context, machine: &Machine) -> Result<VmImage, VmImageError> {
     let image_index = find_image_index_for_machine(machine).await?;
 
+    // TODO(cc): turn this into a proper `VmImageError::NoMatchingImage { arch,
+    // os }` variant. As-is, an unsupported (arch, os) pair from user config
+    // crashes the process with a generic panic message that doesn't even name
+    // the offending machine.
     let Some(image_index) = image_index else {
         panic!("Unable to find matching image for machine");
     };

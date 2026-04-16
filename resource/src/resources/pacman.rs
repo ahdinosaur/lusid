@@ -74,6 +74,8 @@ pub enum PacmanStateError {
     ParseStatus { output: String },
 }
 
+// TODO(cc): add an `Uninstall` variant — mirror image of the apt resource. A declared
+// package cannot currently be retracted.
 #[derive(Debug, Clone)]
 pub enum PacmanChange {
     Install { package: String },

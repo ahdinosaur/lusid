@@ -74,6 +74,8 @@ pub enum AptStateError {
     ParseStatus { status: String },
 }
 
+// TODO(cc): add an `Uninstall` variant. Today a package can be declared but not
+// retracted — removing it from the plan leaves it installed on the machine.
 #[derive(Debug, Clone)]
 pub enum AptChange {
     Install { package: String },

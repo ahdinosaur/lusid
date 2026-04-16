@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Alignment, Line, TextStyle, View};
 
+/// A block of [`Line`]s. The `Display` impl emits each line with a trailing
+/// newline (via `writeln!`). As with [`Line`], `alignment` and `style` are
+/// metadata for downstream renderers, not applied by `Display`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Paragraph {
     pub lines: Vec<Line>,

@@ -1,3 +1,11 @@
+//! Spawn qemu for a prepared [`Vm`]. Assembles the argv via [`Qemu`] and
+//! launches it daemonized; the pid ends up in `<instance_dir>/qemu.pid` where
+//! [`Vm::stop`](super::Vm::stop) can find it later.
+//!
+//! Defaults when the [`Vm`]'s optional fields are `None`: 8 GiB memory, 2
+//! CPUs, graphics on, KVM on. The SSH forward is always prepended to the
+//! caller-supplied `ports` so it survives any reordering.
+
 use lusid_system::{CpuCount, MemorySize};
 use std::net::Ipv4Addr;
 use thiserror::Error;

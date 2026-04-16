@@ -4,6 +4,10 @@ use termtree::Tree as TermTree;
 
 use crate::View;
 
+/// A nested tree of [`View`]s. Renders via [`termtree`] to an indented ASCII
+/// tree (`├──`, `└──`, …) when printed with `Display`. Branch nodes have
+/// their own `view` (the label shown at the branch) plus `children`; leaves
+/// are just a `view`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ViewTree {
     Branch { view: View, children: Vec<ViewTree> },

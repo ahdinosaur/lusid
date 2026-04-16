@@ -65,6 +65,9 @@ pub enum SshSyncError {
     #[error("SFTP error: {0}")]
     RusshSftp(#[from] SftpError),
 
+    // TODO(cc): these two variants are declared but never returned — symlinks are
+    // currently skipped with a `warn!` log rather than erroring. Either wire them up
+    // at the top-level entry point or delete them.
     #[error("refusing to upload: top-level source is a symlink")]
     TopLevelSymlink,
 

@@ -1,3 +1,8 @@
+//! [`Hostname`] newtype wrapping a `String`.
+//
+// Note(cc): this module lives in `id.rs` because the broader plan is to grow other
+// machine identifiers (machine-id, serial numbers) alongside hostname.
+
 use std::{
     convert::Infallible,
     ffi::OsString,
