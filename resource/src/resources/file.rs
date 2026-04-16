@@ -18,16 +18,15 @@ use thiserror::Error;
 
 use crate::ResourceType;
 
-// TODO(cc): stronger defaults for `FileParams::Contents`. `contents` is typed
-// `Secret`, so the common case is materialising an `age`-decrypted value to
-// disk — but `mode`/`user`/`group` are all `Option` and default to whatever
-// the filesystem hands out (usually 0644, current user). agenix defaults to
-// 0400 + root:root and decrypts onto a tmpfs. We should at least:
-//   - require `mode` (or default it to 0600) when the variant is `Contents`,
-//   - document the expectation loudly in the example plan,
-//   - consider a distinct `@core/secret-file` module with the stricter shape.
-// Blocking on a decision about whether to split the module vs tighten the
-// existing one.
+// Note(cc): `FileParams::Contents` accepts a `Secret` `contents` but doesn't
+// tighten any of the ownership fields — `mode`/`user`/`group` are all
+// `Option` and default to whatever the filesystem hands out (usually 0644,
+// current user). Plan authors who want stricter defaults should prefer
+// `@core/secret`, which delegates to this module's machinery but forces
+// `mode` to default to `0o600`. Deliberately not tightening this variant
+// itself: `@core/file` with `type: "contents"` has legitimate non-secret
+// uses (rendering a rendered config, writing a readme, etc.) where 0644 is
+// the right default. See `resource/src/resources/secret.rs`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum FileParams {

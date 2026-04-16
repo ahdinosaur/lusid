@@ -142,13 +142,15 @@ identity and exposed to plans as `ctx.secrets.<stem>` (e.g. the file
 
 ```
 setup: (params, ctx) =>
-  - module: "@core/file"
+  - module: "@core/secret"
     params:
-      type: "contents"
       contents: ctx.secrets.api_key
       path: ctx.system.user.home + "/.config/myapp/api-key"
-      mode: "0600"
 ```
+
+`@core/secret` defaults `mode` to `0o600` (owner-only). If you'd rather
+manage the file yourself, `@core/file` with `type: "contents"` also
+accepts a secret `contents`, but leaves `mode`/`user`/`group` up to you.
 
 Pass the identity via `--identity <path>` (or `identity = "…"` in
 `lusid.toml`). When no identity is provided, `ctx.secrets` is an empty
