@@ -39,6 +39,7 @@ use crate::operations::{
     file::{File, FileOperation},
     git::{Git, GitOperation},
     pacman::{Pacman, PacmanOperation},
+    user::{User, UserOperation},
 };
 
 /// One family of operations (apt, pacman, file, …). Implementors are zero-sized
@@ -84,6 +85,7 @@ pub enum Operation {
     File(FileOperation),
     Command(CommandOperation),
     Git(GitOperation),
+    User(UserOperation),
 }
 
 impl Operation {
@@ -99,6 +101,7 @@ impl Operation {
             file,
             command,
             git,
+            user,
         } = partition_by_type(operations);
 
         std::iter::empty()
@@ -107,6 +110,7 @@ impl Operation {
             .chain(File::merge(file).into_iter().map(Operation::File))
             .chain(Command::merge(command).into_iter().map(Operation::Command))
             .chain(Git::merge(git).into_iter().map(Operation::Git))
+            .chain(User::merge(user).into_iter().map(Operation::User))
             .collect()
     }
 }
@@ -128,6 +132,9 @@ pub enum OperationApplyError {
 
     #[error("git operation failed: {0:?}")]
     Git(<Git as OperationType>::ApplyError),
+
+    #[error("user operation failed: {0:?}")]
+    User(<User as OperationType>::ApplyError),
 }
 
 /// Unified completion future for any operation. `Future::poll` forwards to the active
@@ -139,6 +146,7 @@ pub enum OperationApplyOutput {
     File(#[pin] <File as OperationType>::ApplyOutput),
     Command(#[pin] <Command as OperationType>::ApplyOutput),
     Git(#[pin] <Git as OperationType>::ApplyOutput),
+    User(#[pin] <User as OperationType>::ApplyOutput),
 }
 
 impl Future for OperationApplyOutput {
@@ -152,6 +160,7 @@ impl Future for OperationApplyOutput {
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
             Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
             Git(fut) => fut.poll(cx).map_err(OperationApplyError::Git),
+            User(fut) => fut.poll(cx).map_err(OperationApplyError::User),
         }
     }
 }
@@ -165,6 +174,7 @@ pub enum OperationApplyStdout {
     File(#[pin] <File as OperationType>::ApplyStdout),
     Command(#[pin] <Command as OperationType>::ApplyStdout),
     Git(#[pin] <Git as OperationType>::ApplyStdout),
+    User(#[pin] <User as OperationType>::ApplyStdout),
 }
 
 impl AsyncRead for OperationApplyStdout {
@@ -180,6 +190,7 @@ impl AsyncRead for OperationApplyStdout {
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
+            User(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -193,6 +204,7 @@ pub enum OperationApplyStderr {
     File(#[pin] <File as OperationType>::ApplyStderr),
     Command(#[pin] <Command as OperationType>::ApplyStderr),
     Git(#[pin] <Git as OperationType>::ApplyStderr),
+    User(#[pin] <User as OperationType>::ApplyStderr),
 }
 
 impl AsyncRead for OperationApplyStderr {
@@ -208,6 +220,7 @@ impl AsyncRead for OperationApplyStderr {
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
+            User(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -278,6 +291,16 @@ impl Operation {
                     OperationApplyStderr::Git(stderr),
                 ))
             }
+            Operation::User(op) => {
+                let (output, stdout, stderr) = User::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::User)?;
+                Ok((
+                    OperationApplyOutput::User(output),
+                    OperationApplyStdout::User(stdout),
+                    OperationApplyStderr::User(stderr),
+                ))
+            }
         }
     }
 }
@@ -291,6 +314,7 @@ impl Display for Operation {
             File(op) => Display::fmt(op, f),
             Command(op) => Display::fmt(op, f),
             Git(op) => Display::fmt(op, f),
+            User(op) => Display::fmt(op, f),
         }
     }
 }
@@ -304,6 +328,7 @@ impl Render for Operation {
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            User(params) => params.render(),
         }
     }
 }
@@ -316,6 +341,7 @@ pub struct OperationsByType {
     file: Vec<FileOperation>,
     command: Vec<CommandOperation>,
     git: Vec<GitOperation>,
+    user: Vec<UserOperation>,
 }
 
 /// Bucket a mixed iterator of operations into per-family vectors.
@@ -325,6 +351,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     let mut file: Vec<FileOperation> = Vec::new();
     let mut command: Vec<CommandOperation> = Vec::new();
     let mut git: Vec<GitOperation> = Vec::new();
+    let mut user: Vec<UserOperation> = Vec::new();
     for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
@@ -332,6 +359,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
             Operation::File(op) => file.push(op),
             Operation::Command(op) => command.push(op),
             Operation::Git(op) => git.push(op),
+            Operation::User(op) => user.push(op),
         }
     }
     OperationsByType {
@@ -340,5 +368,6 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
         file,
         command,
         git,
+        user,
     }
 }
