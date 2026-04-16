@@ -20,6 +20,7 @@ use crate::resources::command::{
     Command, CommandChange, CommandParams, CommandResource, CommandState,
 };
 use crate::resources::file::{File, FileChange, FileResource, FileState};
+use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 
 /// ResourceType:
@@ -72,6 +73,7 @@ pub enum ResourceParams {
     File(FileParams),
     Pacman(PacmanParams),
     Command(CommandParams),
+    Git(GitParams),
 }
 
 impl Display for ResourceParams {
@@ -82,6 +84,7 @@ impl Display for ResourceParams {
             File(params) => params.fmt(f),
             Pacman(params) => params.fmt(f),
             Command(params) => params.fmt(f),
+            Git(params) => params.fmt(f),
         }
     }
 }
@@ -94,6 +97,7 @@ impl Render for ResourceParams {
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
+            Git(params) => params.render(),
         }
     }
 }
@@ -104,6 +108,7 @@ pub enum Resource {
     File(FileResource),
     Pacman(PacmanResource),
     Command(CommandResource),
+    Git(GitResource),
 }
 
 impl Display for Resource {
@@ -114,6 +119,7 @@ impl Display for Resource {
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
+            Git(git) => git.fmt(f),
         }
     }
 }
@@ -126,6 +132,7 @@ impl Render for Resource {
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
+            Git(params) => params.render(),
         }
     }
 }
@@ -136,6 +143,7 @@ pub enum ResourceState {
     File(FileState),
     Pacman(PacmanState),
     Command(CommandState),
+    Git(GitState),
 }
 
 impl Display for ResourceState {
@@ -146,6 +154,7 @@ impl Display for ResourceState {
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
+            Git(git) => git.fmt(f),
         }
     }
 }
@@ -158,6 +167,7 @@ impl Render for ResourceState {
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
+            Git(params) => params.render(),
         }
     }
 }
@@ -172,6 +182,9 @@ pub enum ResourceStateError {
     Pacman(#[from] <Pacman as ResourceType>::StateError),
     #[error("command state error: {0}")]
     Command(#[from] <Command as ResourceType>::StateError),
+
+    #[error("git state error: {0}")]
+    Git(#[from] <Git as ResourceType>::StateError),
 }
 
 #[derive(Debug, Clone)]
@@ -180,6 +193,7 @@ pub enum ResourceChange {
     File(FileChange),
     Pacman(PacmanChange),
     Command(CommandChange),
+    Git(GitChange),
 }
 
 impl Display for ResourceChange {
@@ -190,6 +204,7 @@ impl Display for ResourceChange {
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
+            Git(git) => git.fmt(f),
         }
     }
 }
@@ -202,6 +217,7 @@ impl Render for ResourceChange {
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
+            Git(params) => params.render(),
         }
     }
 }
@@ -223,6 +239,7 @@ impl ResourceParams {
             ResourceParams::File(params) => typed::<File>(params, Resource::File),
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
             ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
+            ResourceParams::Git(params) => typed::<Git>(params, Resource::Git),
         }
     }
 }
@@ -263,6 +280,9 @@ impl Resource {
                 )
                 .await
             }
+            Resource::Git(resource) => {
+                typed::<Git>(ctx, resource, ResourceState::Git, ResourceStateError::Git).await
+            }
         }
     }
 
@@ -290,6 +310,9 @@ impl Resource {
             (Resource::Command(resource), ResourceState::Command(state)) => {
                 typed::<Command>(resource, state, ResourceChange::Command)
             }
+            (Resource::Git(resource), ResourceState::Git(state)) => {
+                typed::<Git>(resource, state, ResourceChange::Git)
+            }
             _ => {
                 // Programmer error, should never happen, or if it does should be immediately obvious.
                 panic!("Unmatched resource and state")
@@ -305,6 +328,7 @@ impl ResourceChange {
             ResourceChange::File(change) => File::operations(change),
             ResourceChange::Pacman(change) => Pacman::operations(change),
             ResourceChange::Command(change) => Command::operations(change),
+            ResourceChange::Git(change) => Git::operations(change),
         }
     }
 }
