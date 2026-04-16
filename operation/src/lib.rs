@@ -35,6 +35,7 @@ pub mod operations;
 
 use crate::operations::{
     apt::{Apt, AptOperation},
+    apt_repo::{AptRepo, AptRepoOperation},
     command::{Command, CommandOperation},
     file::{File, FileOperation},
     git::{Git, GitOperation},
@@ -80,6 +81,7 @@ pub trait OperationType {
 #[derive(Debug, Clone)]
 pub enum Operation {
     Apt(AptOperation),
+    AptRepo(AptRepoOperation),
     Pacman(PacmanOperation),
     File(FileOperation),
     Command(CommandOperation),
@@ -95,6 +97,7 @@ impl Operation {
     pub fn merge(operations: impl IntoIterator<Item = Operation>) -> Vec<Operation> {
         let OperationsByType {
             apt,
+            apt_repo,
             pacman,
             file,
             command,
@@ -103,6 +106,7 @@ impl Operation {
 
         std::iter::empty()
             .chain(Apt::merge(apt).into_iter().map(Operation::Apt))
+            .chain(AptRepo::merge(apt_repo).into_iter().map(Operation::AptRepo))
             .chain(Pacman::merge(pacman).into_iter().map(Operation::Pacman))
             .chain(File::merge(file).into_iter().map(Operation::File))
             .chain(Command::merge(command).into_iter().map(Operation::Command))
@@ -116,6 +120,9 @@ impl Operation {
 pub enum OperationApplyError {
     #[error("apt operation failed: {0:?}")]
     Apt(<Apt as OperationType>::ApplyError),
+
+    #[error("apt-repo operation failed: {0:?}")]
+    AptRepo(<AptRepo as OperationType>::ApplyError),
 
     #[error("pacman operation failed: {0:?}")]
     Pacman(<Pacman as OperationType>::ApplyError),
@@ -135,6 +142,7 @@ pub enum OperationApplyError {
 #[pin_project(project = OperationApplyOutputProject)]
 pub enum OperationApplyOutput {
     Apt(#[pin] <Apt as OperationType>::ApplyOutput),
+    AptRepo(#[pin] <AptRepo as OperationType>::ApplyOutput),
     Pacman(#[pin] <Pacman as OperationType>::ApplyOutput),
     File(#[pin] <File as OperationType>::ApplyOutput),
     Command(#[pin] <Command as OperationType>::ApplyOutput),
@@ -148,6 +156,7 @@ impl Future for OperationApplyOutput {
         use OperationApplyOutputProject::*;
         match self.project() {
             Apt(fut) => fut.poll(cx).map_err(OperationApplyError::Apt),
+            AptRepo(fut) => fut.poll(cx).map_err(OperationApplyError::AptRepo),
             Pacman(fut) => fut.poll(cx).map_err(OperationApplyError::Pacman),
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
             Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
@@ -161,6 +170,7 @@ impl Future for OperationApplyOutput {
 #[pin_project(project = OperationApplyStdoutProject)]
 pub enum OperationApplyStdout {
     Apt(#[pin] <Apt as OperationType>::ApplyStdout),
+    AptRepo(#[pin] <AptRepo as OperationType>::ApplyStdout),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStdout),
     File(#[pin] <File as OperationType>::ApplyStdout),
     Command(#[pin] <Command as OperationType>::ApplyStdout),
@@ -176,6 +186,7 @@ impl AsyncRead for OperationApplyStdout {
         use OperationApplyStdoutProject::*;
         match self.project() {
             Apt(stream) => stream.poll_read(cx, buf),
+            AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
@@ -189,6 +200,7 @@ impl AsyncRead for OperationApplyStdout {
 #[pin_project(project = OperationApplyStderrProject)]
 pub enum OperationApplyStderr {
     Apt(#[pin] <Apt as OperationType>::ApplyStderr),
+    AptRepo(#[pin] <AptRepo as OperationType>::ApplyStderr),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStderr),
     File(#[pin] <File as OperationType>::ApplyStderr),
     Command(#[pin] <Command as OperationType>::ApplyStderr),
@@ -204,6 +216,7 @@ impl AsyncRead for OperationApplyStderr {
         use OperationApplyStderrProject::*;
         match self.project() {
             Apt(stream) => stream.poll_read(cx, buf),
+            AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
@@ -236,6 +249,16 @@ impl Operation {
                     OperationApplyOutput::Apt(output),
                     OperationApplyStdout::Apt(stdout),
                     OperationApplyStderr::Apt(stderr),
+                ))
+            }
+            Operation::AptRepo(op) => {
+                let (output, stdout, stderr) = AptRepo::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::AptRepo)?;
+                Ok((
+                    OperationApplyOutput::AptRepo(output),
+                    OperationApplyStdout::AptRepo(stdout),
+                    OperationApplyStderr::AptRepo(stderr),
                 ))
             }
             Operation::Pacman(op) => {
@@ -287,6 +310,7 @@ impl Display for Operation {
         use Operation::*;
         match self {
             Apt(op) => Display::fmt(op, f),
+            AptRepo(op) => Display::fmt(op, f),
             Pacman(op) => Display::fmt(op, f),
             File(op) => Display::fmt(op, f),
             Command(op) => Display::fmt(op, f),
@@ -300,6 +324,7 @@ impl Render for Operation {
         use Operation::*;
         match self {
             Apt(params) => params.render(),
+            AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
@@ -312,6 +337,7 @@ impl Render for Operation {
 #[derive(Debug, Clone)]
 pub struct OperationsByType {
     apt: Vec<AptOperation>,
+    apt_repo: Vec<AptRepoOperation>,
     pacman: Vec<PacmanOperation>,
     file: Vec<FileOperation>,
     command: Vec<CommandOperation>,
@@ -321,6 +347,7 @@ pub struct OperationsByType {
 /// Bucket a mixed iterator of operations into per-family vectors.
 fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> OperationsByType {
     let mut apt: Vec<AptOperation> = Vec::new();
+    let mut apt_repo: Vec<AptRepoOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
     let mut command: Vec<CommandOperation> = Vec::new();
@@ -328,6 +355,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
+            Operation::AptRepo(op) => apt_repo.push(op),
             Operation::Pacman(op) => pacman.push(op),
             Operation::File(op) => file.push(op),
             Operation::Command(op) => command.push(op),
@@ -336,6 +364,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     }
     OperationsByType {
         apt,
+        apt_repo,
         pacman,
         file,
         command,

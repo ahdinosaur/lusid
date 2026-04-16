@@ -39,6 +39,9 @@ use thiserror::Error;
 mod resources;
 
 use crate::resources::apt::{Apt, AptChange, AptParams, AptResource, AptState};
+use crate::resources::apt_repo::{
+    AptRepo, AptRepoChange, AptRepoParams, AptRepoResource, AptRepoState,
+};
 use crate::resources::command::{
     Command, CommandChange, CommandParams, CommandResource, CommandState,
 };
@@ -98,6 +101,7 @@ pub trait ResourceType {
 #[derive(Debug, Clone)]
 pub enum ResourceParams {
     Apt(AptParams),
+    AptRepo(AptRepoParams),
     File(FileParams),
     Pacman(PacmanParams),
     Command(CommandParams),
@@ -109,6 +113,7 @@ impl Display for ResourceParams {
         use ResourceParams::*;
         match self {
             Apt(params) => params.fmt(f),
+            AptRepo(params) => params.fmt(f),
             File(params) => params.fmt(f),
             Pacman(params) => params.fmt(f),
             Command(params) => params.fmt(f),
@@ -122,6 +127,7 @@ impl Render for ResourceParams {
         use ResourceParams::*;
         match self {
             Apt(params) => params.render(),
+            AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
@@ -134,6 +140,7 @@ impl Render for ResourceParams {
 #[derive(Debug, Clone)]
 pub enum Resource {
     Apt(AptResource),
+    AptRepo(AptRepoResource),
     File(FileResource),
     Pacman(PacmanResource),
     Command(CommandResource),
@@ -145,6 +152,7 @@ impl Display for Resource {
         use Resource::*;
         match self {
             Apt(apt) => apt.fmt(f),
+            AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
@@ -158,6 +166,7 @@ impl Render for Resource {
         use Resource::*;
         match self {
             Apt(params) => params.render(),
+            AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
@@ -173,6 +182,7 @@ impl Render for Resource {
 #[derive(Debug, Clone)]
 pub enum ResourceState {
     Apt(AptState),
+    AptRepo(AptRepoState),
     File(FileState),
     Pacman(PacmanState),
     Command(CommandState),
@@ -184,6 +194,7 @@ impl Display for ResourceState {
         use ResourceState::*;
         match self {
             Apt(apt) => apt.fmt(f),
+            AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
@@ -197,6 +208,7 @@ impl Render for ResourceState {
         use ResourceState::*;
         match self {
             Apt(params) => params.render(),
+            AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
@@ -211,6 +223,10 @@ impl Render for ResourceState {
 pub enum ResourceStateError {
     #[error("apt state error: {0}")]
     Apt(#[from] <Apt as ResourceType>::StateError),
+
+    #[error("apt-repo state error: {0}")]
+    AptRepo(#[from] <AptRepo as ResourceType>::StateError),
+
     #[error("file state error: {0}")]
     File(#[from] <File as ResourceType>::StateError),
     #[error("pacman state error: {0}")]
@@ -226,6 +242,7 @@ pub enum ResourceStateError {
 #[derive(Debug, Clone)]
 pub enum ResourceChange {
     Apt(AptChange),
+    AptRepo(AptRepoChange),
     File(FileChange),
     Pacman(PacmanChange),
     Command(CommandChange),
@@ -237,6 +254,7 @@ impl Display for ResourceChange {
         use ResourceChange::*;
         match self {
             Apt(apt) => apt.fmt(f),
+            AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
@@ -250,6 +268,7 @@ impl Render for ResourceChange {
         use ResourceChange::*;
         match self {
             Apt(params) => params.render(),
+            AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
@@ -274,6 +293,7 @@ impl ResourceParams {
 
         match self {
             ResourceParams::Apt(params) => typed::<Apt>(params, Resource::Apt),
+            ResourceParams::AptRepo(params) => typed::<AptRepo>(params, Resource::AptRepo),
             ResourceParams::File(params) => typed::<File>(params, Resource::File),
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
             ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
@@ -298,6 +318,15 @@ impl Resource {
         match self {
             Resource::Apt(resource) => {
                 typed::<Apt>(ctx, resource, ResourceState::Apt, ResourceStateError::Apt).await
+            }
+            Resource::AptRepo(resource) => {
+                typed::<AptRepo>(
+                    ctx,
+                    resource,
+                    ResourceState::AptRepo,
+                    ResourceStateError::AptRepo,
+                )
+                .await
             }
             Resource::File(resource) => {
                 typed::<File>(ctx, resource, ResourceState::File, ResourceStateError::File).await
@@ -349,6 +378,9 @@ impl Resource {
             (Resource::Apt(resource), ResourceState::Apt(state)) => {
                 typed::<Apt>(resource, state, ResourceChange::Apt)
             }
+            (Resource::AptRepo(resource), ResourceState::AptRepo(state)) => {
+                typed::<AptRepo>(resource, state, ResourceChange::AptRepo)
+            }
             (Resource::File(resource), ResourceState::File(state)) => {
                 typed::<File>(resource, state, ResourceChange::File)
             }
@@ -375,6 +407,7 @@ impl ResourceChange {
     pub fn operations(self) -> Vec<CausalityTree<Operation>> {
         match self {
             ResourceChange::Apt(change) => Apt::operations(change),
+            ResourceChange::AptRepo(change) => AptRepo::operations(change),
             ResourceChange::File(change) => File::operations(change),
             ResourceChange::Pacman(change) => Pacman::operations(change),
             ResourceChange::Command(change) => Command::operations(change),
