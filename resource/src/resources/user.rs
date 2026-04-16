@@ -21,6 +21,9 @@ use crate::ResourceType;
 ///
 /// Tagged by `state: "present" | "absent"`. Mirrors the shape used by Salt (`user.present`)
 /// and Ansible (`ansible.builtin.user`), adapted to lusid's typed params schema.
+// TODO(cc): add password (hashed), lock/unlock (`usermod -L`/`-U`), and account
+// expiry (`chage` / `usermod --expiredate`) support. Salt and Ansible both expose
+// these.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum UserParams {
@@ -246,17 +249,21 @@ impl ResourceType for User {
                 shell,
                 system,
                 create_home,
-            } => UserResource::Present {
-                name,
-                uid,
-                group,
-                extra_groups,
-                comment,
-                home,
-                shell,
-                system: system.unwrap_or(false),
-                create_home: create_home.unwrap_or(true),
-            },
+            } => {
+                let system = system.unwrap_or(false);
+                UserResource::Present {
+                    name,
+                    uid,
+                    group,
+                    extra_groups,
+                    comment,
+                    home,
+                    shell,
+                    system,
+                    // Match useradd/Salt/Ansible: create a home for normal users, skip for system users.
+                    create_home: create_home.unwrap_or(!system),
+                }
+            }
             UserParams::Absent { name, remove_home } => UserResource::Absent {
                 name,
                 remove_home: remove_home.unwrap_or(false),
@@ -379,6 +386,11 @@ impl ResourceType for User {
                     }
                 });
 
+                // Note(cc): raw string equality on GECOS. If something outside lusid
+                // (e.g. `chfn`) has populated the sub-fields past the comment — the field
+                // is `full_name,room,work_phone,home_phone` — we'll see "Alice,,,,5551234"
+                // against a declared "Alice" and emit a spurious Modify. We assume the
+                // plan owns the comment fully, so this is acceptable.
                 let comment_change = comment
                     .as_ref()
                     .filter(|declared| declared.as_str() != current_comment.as_str())
@@ -545,9 +557,7 @@ async fn get_group_name_for_gid(gid: u32) -> Result<Option<String>, UserStateErr
 
     // group format: name:password:gid:members
     let line = stdout.lines().next().unwrap_or("");
-    let name = line.split(':').next().ok_or_else(|| UserStateError::ParseGroup {
-        output: stdout.clone(),
-    })?;
+    let name = line.split(':').next().unwrap_or("");
     if name.is_empty() {
         return Err(UserStateError::ParseGroup { output: stdout });
     }
