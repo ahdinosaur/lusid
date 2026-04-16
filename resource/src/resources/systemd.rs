@@ -5,7 +5,7 @@ use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
-use lusid_operation::{Operation, operations::systemd_service::SystemdServiceOperation};
+use lusid_operation::{Operation, operations::systemd::SystemdOperation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
@@ -15,13 +15,13 @@ use thiserror::Error;
 use crate::ResourceType;
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct SystemdServiceParams {
+pub struct SystemdParams {
     pub name: String,
     pub enabled: Option<bool>,
     pub active: Option<bool>,
 }
 
-impl Display for SystemdServiceParams {
+impl Display for SystemdParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             name,
@@ -30,21 +30,21 @@ impl Display for SystemdServiceParams {
         } = self;
         write!(
             f,
-            "SystemdService(name = {name}, enabled = {enabled:?}, active = {active:?})"
+            "Systemd(name = {name}, enabled = {enabled:?}, active = {active:?})"
         )
     }
 }
 
-impl_display_render!(SystemdServiceParams);
+impl_display_render!(SystemdParams);
 
 #[derive(Debug, Clone)]
-pub struct SystemdServiceResource {
+pub struct SystemdResource {
     pub name: String,
     pub enabled: bool,
     pub active: bool,
 }
 
-impl Display for SystemdServiceResource {
+impl Display for SystemdResource {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             name,
@@ -53,30 +53,30 @@ impl Display for SystemdServiceResource {
         } = self;
         write!(
             f,
-            "SystemdService(name = {name}, enabled = {enabled}, active = {active})"
+            "Systemd(name = {name}, enabled = {enabled}, active = {active})"
         )
     }
 }
 
-impl_display_render!(SystemdServiceResource);
+impl_display_render!(SystemdResource);
 
 #[derive(Debug, Clone)]
-pub struct SystemdServiceState {
+pub struct SystemdState {
     pub enabled: bool,
     pub active: bool,
 }
 
-impl Display for SystemdServiceState {
+impl Display for SystemdState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self { enabled, active } = self;
-        write!(f, "SystemdService(enabled = {enabled}, active = {active})")
+        write!(f, "Systemd(enabled = {enabled}, active = {active})")
     }
 }
 
-impl_display_render!(SystemdServiceState);
+impl_display_render!(SystemdState);
 
 #[derive(Error, Debug)]
-pub enum SystemdServiceStateError {
+pub enum SystemdStateError {
     #[error(transparent)]
     Command(#[from] CommandError),
 
@@ -95,15 +95,15 @@ pub enum SystemdServiceStateError {
 
 /// Desired-state delta for a systemd unit. `enable` / `active` are `Some(desired)` if a
 /// transition is needed on that dimension, `None` if the current state already matches.
-/// At least one field is `Some` — otherwise [`SystemdService::change`] returns `None`.
+/// At least one field is `Some` — otherwise [`Systemd::change`] returns `None`.
 #[derive(Debug, Clone)]
-pub struct SystemdServiceChange {
+pub struct SystemdChange {
     pub name: String,
     pub enable: Option<bool>,
     pub active: Option<bool>,
 }
 
-impl Display for SystemdServiceChange {
+impl Display for SystemdChange {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self {
             name,
@@ -117,18 +117,18 @@ impl Display for SystemdServiceChange {
         if let Some(active) = active {
             verbs.push(if *active { "start" } else { "stop" });
         }
-        write!(f, "SystemdService::{}({})", verbs.join("+"), name)
+        write!(f, "Systemd::{}({})", verbs.join("+"), name)
     }
 }
 
-impl_display_render!(SystemdServiceChange);
+impl_display_render!(SystemdChange);
 
 #[derive(Debug, Clone)]
-pub struct SystemdService;
+pub struct Systemd;
 
 #[async_trait]
-impl ResourceType for SystemdService {
-    const ID: &'static str = "systemd-service";
+impl ResourceType for Systemd {
+    const ID: &'static str = "systemd";
 
     fn param_types() -> Option<Spanned<ParamTypes>> {
         let span = Span::new(SourceId::empty(), 0, 0);
@@ -150,13 +150,13 @@ impl ResourceType for SystemdService {
         ))
     }
 
-    type Params = SystemdServiceParams;
-    type Resource = SystemdServiceResource;
+    type Params = SystemdParams;
+    type Resource = SystemdResource;
 
     fn resources(params: Self::Params) -> Vec<CausalityTree<Self::Resource>> {
         vec![CausalityTree::leaf(
             CausalityMeta::default(),
-            SystemdServiceResource {
+            SystemdResource {
                 name: params.name,
                 enabled: params.enabled.unwrap_or(true),
                 active: params.active.unwrap_or(true),
@@ -164,8 +164,8 @@ impl ResourceType for SystemdService {
         )]
     }
 
-    type State = SystemdServiceState;
-    type StateError = SystemdServiceStateError;
+    type State = SystemdState;
+    type StateError = SystemdStateError;
 
     async fn state(
         _ctx: &mut Context,
@@ -199,27 +199,27 @@ impl ResourceType for SystemdService {
         }
 
         let load_state =
-            load_state.ok_or(SystemdServiceStateError::MissingField { field: "LoadState" })?;
+            load_state.ok_or(SystemdStateError::MissingField { field: "LoadState" })?;
         if load_state == "not-found" {
-            return Err(SystemdServiceStateError::UnitNotFound {
+            return Err(SystemdStateError::UnitNotFound {
                 name: resource.name.clone(),
             });
         }
 
-        let active_state = active_state.ok_or(SystemdServiceStateError::MissingField {
+        let active_state = active_state.ok_or(SystemdStateError::MissingField {
             field: "ActiveState",
         })?;
         let active = parse_active_state(active_state)?;
 
-        let unit_file_state = unit_file_state.ok_or(SystemdServiceStateError::MissingField {
+        let unit_file_state = unit_file_state.ok_or(SystemdStateError::MissingField {
             field: "UnitFileState",
         })?;
         let enabled = parse_unit_file_state(unit_file_state)?;
 
-        Ok(SystemdServiceState { enabled, active })
+        Ok(SystemdState { enabled, active })
     }
 
-    type Change = SystemdServiceChange;
+    type Change = SystemdChange;
 
     fn change(resource: &Self::Resource, state: &Self::State) -> Option<Self::Change> {
         let enable = (resource.enabled != state.enabled).then_some(resource.enabled);
@@ -227,7 +227,7 @@ impl ResourceType for SystemdService {
         if enable.is_none() && active.is_none() {
             return None;
         }
-        Some(SystemdServiceChange {
+        Some(SystemdChange {
             name: resource.name.clone(),
             enable,
             active,
@@ -235,7 +235,7 @@ impl ResourceType for SystemdService {
     }
 
     fn operations(change: Self::Change) -> Vec<CausalityTree<Operation>> {
-        let SystemdServiceChange {
+        let SystemdChange {
             name,
             enable,
             active,
@@ -243,24 +243,24 @@ impl ResourceType for SystemdService {
         let mut ops: Vec<CausalityTree<Operation>> = Vec::new();
         if let Some(enable) = enable {
             let op = if enable {
-                SystemdServiceOperation::Enable { name: name.clone() }
+                SystemdOperation::Enable { name: name.clone() }
             } else {
-                SystemdServiceOperation::Disable { name: name.clone() }
+                SystemdOperation::Disable { name: name.clone() }
             };
             ops.push(CausalityTree::leaf(
                 CausalityMeta::default(),
-                Operation::SystemdService(op),
+                Operation::Systemd(op),
             ));
         }
         if let Some(active) = active {
             let op = if active {
-                SystemdServiceOperation::Start { name }
+                SystemdOperation::Start { name }
             } else {
-                SystemdServiceOperation::Stop { name }
+                SystemdOperation::Stop { name }
             };
             ops.push(CausalityTree::leaf(
                 CausalityMeta::default(),
-                Operation::SystemdService(op),
+                Operation::Systemd(op),
             ));
         }
         ops
@@ -273,11 +273,11 @@ impl ResourceType for SystemdService {
 /// thrashing a service mid-transition. `failed` maps to `inactive` so that a user who
 /// declared `active: true` still gets a `start` attempt — if the unit keeps failing,
 /// the apply surfaces systemctl's stderr.
-fn parse_active_state(state: &str) -> Result<bool, SystemdServiceStateError> {
+fn parse_active_state(state: &str) -> Result<bool, SystemdStateError> {
     match state {
         "active" | "reloading" | "activating" => Ok(true),
         "inactive" | "deactivating" | "failed" => Ok(false),
-        other => Err(SystemdServiceStateError::UnknownActiveState {
+        other => Err(SystemdStateError::UnknownActiveState {
             state: other.to_string(),
         }),
     }
@@ -290,12 +290,12 @@ fn parse_active_state(state: &str) -> Result<bool, SystemdServiceStateError> {
 /// on these and `disable` refuses. `masked` reports as disabled (masking blocks
 /// activation entirely, which is stricter than disable). Empty `UnitFileState` is
 /// common for runtime-only units that have no install hook; treat as disabled.
-fn parse_unit_file_state(state: &str) -> Result<bool, SystemdServiceStateError> {
+fn parse_unit_file_state(state: &str) -> Result<bool, SystemdStateError> {
     match state {
         "enabled" | "enabled-runtime" | "static" | "alias" | "indirect" | "linked"
         | "linked-runtime" | "generated" | "transient" => Ok(true),
         "disabled" | "masked" | "masked-runtime" | "" => Ok(false),
-        other => Err(SystemdServiceStateError::UnknownUnitFileState {
+        other => Err(SystemdStateError::UnknownUnitFileState {
             state: other.to_string(),
         }),
     }
