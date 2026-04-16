@@ -45,6 +45,9 @@ use crate::resources::command::{
 use crate::resources::file::{File, FileChange, FileResource, FileState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
+use crate::resources::systemd::{
+    Systemd, SystemdChange, SystemdParams, SystemdResource, SystemdState,
+};
 
 /// The full pipeline for a single resource type.
 ///
@@ -102,6 +105,7 @@ pub enum ResourceParams {
     Pacman(PacmanParams),
     Command(CommandParams),
     Git(GitParams),
+    Systemd(SystemdParams),
 }
 
 impl Display for ResourceParams {
@@ -113,6 +117,7 @@ impl Display for ResourceParams {
             Pacman(params) => params.fmt(f),
             Command(params) => params.fmt(f),
             Git(params) => params.fmt(f),
+            Systemd(params) => params.fmt(f),
         }
     }
 }
@@ -126,6 +131,7 @@ impl Render for ResourceParams {
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            Systemd(params) => params.render(),
         }
     }
 }
@@ -138,6 +144,7 @@ pub enum Resource {
     Pacman(PacmanResource),
     Command(CommandResource),
     Git(GitResource),
+    Systemd(SystemdResource),
 }
 
 impl Display for Resource {
@@ -149,6 +156,7 @@ impl Display for Resource {
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
+            Systemd(systemd) => systemd.fmt(f),
         }
     }
 }
@@ -162,6 +170,7 @@ impl Render for Resource {
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            Systemd(params) => params.render(),
         }
     }
 }
@@ -177,6 +186,7 @@ pub enum ResourceState {
     Pacman(PacmanState),
     Command(CommandState),
     Git(GitState),
+    Systemd(SystemdState),
 }
 
 impl Display for ResourceState {
@@ -188,6 +198,7 @@ impl Display for ResourceState {
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
+            Systemd(systemd) => systemd.fmt(f),
         }
     }
 }
@@ -201,6 +212,7 @@ impl Render for ResourceState {
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            Systemd(params) => params.render(),
         }
     }
 }
@@ -220,6 +232,9 @@ pub enum ResourceStateError {
 
     #[error("git state error: {0}")]
     Git(#[from] <Git as ResourceType>::StateError),
+
+    #[error("systemd state error: {0}")]
+    Systemd(#[from] <Systemd as ResourceType>::StateError),
 }
 
 /// Dispatcher over every resource's `Change`.
@@ -230,6 +245,7 @@ pub enum ResourceChange {
     Pacman(PacmanChange),
     Command(CommandChange),
     Git(GitChange),
+    Systemd(SystemdChange),
 }
 
 impl Display for ResourceChange {
@@ -241,6 +257,7 @@ impl Display for ResourceChange {
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
+            Systemd(systemd) => systemd.fmt(f),
         }
     }
 }
@@ -254,6 +271,7 @@ impl Render for ResourceChange {
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            Systemd(params) => params.render(),
         }
     }
 }
@@ -278,6 +296,7 @@ impl ResourceParams {
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
             ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
             ResourceParams::Git(params) => typed::<Git>(params, Resource::Git),
+            ResourceParams::Systemd(params) => typed::<Systemd>(params, Resource::Systemd),
         }
     }
 }
@@ -323,6 +342,15 @@ impl Resource {
             Resource::Git(resource) => {
                 typed::<Git>(ctx, resource, ResourceState::Git, ResourceStateError::Git).await
             }
+            Resource::Systemd(resource) => {
+                typed::<Systemd>(
+                    ctx,
+                    resource,
+                    ResourceState::Systemd,
+                    ResourceStateError::Systemd,
+                )
+                .await
+            }
         }
     }
 
@@ -361,6 +389,9 @@ impl Resource {
             (Resource::Git(resource), ResourceState::Git(state)) => {
                 typed::<Git>(resource, state, ResourceChange::Git)
             }
+            (Resource::Systemd(resource), ResourceState::Systemd(state)) => {
+                typed::<Systemd>(resource, state, ResourceChange::Systemd)
+            }
             _ => {
                 // Programmer error, should never happen, or if it does should be immediately obvious.
                 panic!("Unmatched resource and state")
@@ -379,6 +410,7 @@ impl ResourceChange {
             ResourceChange::Pacman(change) => Pacman::operations(change),
             ResourceChange::Command(change) => Command::operations(change),
             ResourceChange::Git(change) => Git::operations(change),
+            ResourceChange::Systemd(change) => Systemd::operations(change),
         }
     }
 }
