@@ -28,6 +28,7 @@
 //! so authors should order from most-specific to most-general.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use displaydoc::Display;
 use indexmap::IndexMap;
@@ -35,8 +36,18 @@ use rimu::{
     Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject, from_serde_value,
 };
 use rimu_interop::{FromRimu, ToRimuError};
+use secrecy::{ExposeSecret, SecretBox};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
+
+/// A secret plaintext string. Wrapped in [`Arc`] so `ParamValue::Clone` stays
+/// cheap, and in [`SecretBox<String>`] so `Debug` is redacted and the plaintext
+/// is zeroised when the last clone drops.
+///
+/// `SecretBox<String>` (rather than `secrecy::SecretString`, a.k.a. `SecretBox<str>`)
+/// is used because only the sized form implements `serde::Deserialize`, which is
+/// needed so resource param structs can deserialise a secret field.
+pub type Secret = Arc<SecretBox<String>>;
 
 /// Schema node: the allowed shape of a single value.
 ///
@@ -46,6 +57,9 @@ use thiserror::Error;
 ///   the inner type.
 /// - `HostPath` / `TargetPath` are `String` at the Rimu level but carry stricter
 ///   semantics (relative vs absolute; see module docs).
+/// - `Secret` is `String` at the Rimu level, but materialises into a
+///   [`ParamValue::Secret`] so downstream code holds a redacted-on-Debug
+///   [`SecretString`] rather than plaintext.
 #[derive(Debug, Clone)]
 pub enum ParamType {
     Literal(Value),
@@ -56,6 +70,7 @@ pub enum ParamType {
     Object { value: Box<Spanned<ParamType>> },
     HostPath,
     TargetPath,
+    Secret,
 }
 
 #[derive(Debug, Clone)]
@@ -107,6 +122,9 @@ pub enum ParamTypes {
 /// Mirrors [`ParamType`] variants but holds a concrete value. Notably,
 /// `HostPath` becomes a fully-resolved absolute [`PathBuf`], so downstream
 /// consumers never need to know where the source file lived.
+///
+/// `Secret` wraps its plaintext in a [`Secret`] (an `Arc<SecretBox<String>>`) so
+/// clones are cheap and `Debug` stays redacted.
 #[derive(Debug, Clone)]
 pub enum ParamValue {
     Literal(Value),
@@ -117,6 +135,7 @@ pub enum ParamValue {
     Object(IndexMap<String, Spanned<ParamValue>>),
     HostPath(PathBuf),
     TargetPath(String),
+    Secret(Secret),
 }
 
 impl ParamValue {
@@ -144,6 +163,7 @@ impl ParamValue {
             }
             ParamValue::HostPath(path) => Value::String(path.to_string_lossy().into_owned()),
             ParamValue::TargetPath(path) => Value::String(path),
+            ParamValue::Secret(secret) => Value::String(secret.expose_secret().to_owned()),
         }
     }
 }
@@ -254,6 +274,9 @@ impl ParamValue {
                 }
             }
             (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
+            (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Arc::new(
+                SecretBox::new(Box::new(value)),
+            ))),
             (typ, value) => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
                 typ: Box::new(typ),
                 value: Box::new(value),
@@ -413,6 +436,7 @@ impl FromRimu for ParamType {
             "number" => Ok(ParamType::Number),
             "host-path" => Ok(ParamType::HostPath),
             "target-path" => Ok(ParamType::TargetPath),
+            "secret" => Ok(ParamType::Secret),
             "list" => {
                 let item = object
                     .swap_remove("item")
@@ -677,6 +701,11 @@ fn validate_type(
             }
             Err(mismatch(param_type, value))
         }
+
+        ParamType::Secret => match value_inner {
+            Value::String(_) => Ok(()),
+            _ => Err(mismatch(param_type, value)),
+        },
 
         ParamType::List { item } => {
             let Value::List(items) = value_inner else {

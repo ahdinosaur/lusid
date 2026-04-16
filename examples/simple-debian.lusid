@@ -5,7 +5,7 @@ params:
   whatever:
     type: "boolean"
 
-setup: (params, system) =>
+setup: (params, ctx) =>
   - module: "@core/apt"
     id: "install-curl"
     params:
@@ -15,7 +15,7 @@ setup: (params, system) =>
     params:
       type: "source"
       source: "./hello.txt"
-      path: system.user.home + "/hello.txt"
+      path: ctx.system.user.home + "/hello.txt"
 
   - module: "@core/command"
     params:

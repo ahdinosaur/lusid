@@ -6,7 +6,7 @@
 
 **Lusid** takes a `.lusid` plan (written in the **Rimu** language), optionally a parameters object, and:
 
-1. Loads + evaluates the plan’s `setup(params, system)` function → returns a list of **PlanItem**s.
+1. Loads + evaluates the plan’s `setup(params, ctx)` function → returns a list of **PlanItem**s. (`ctx` is a Rimu object bundling runtime inputs — `{ system, secrets }`; see the Secrets section below.)
 2. Converts PlanItems into either:
    - **Core modules** (`@core/*`) → become typed `ResourceParams` (apt/file/pacman today)
    - Or nested plans (module path) → recursively planned
@@ -70,6 +70,29 @@ If you add new path-like types, follow this pattern and be explicit about absolu
 `lusid-apply` emits **newline-delimited JSON** `AppUpdate` messages to stdout.
 The `lusid` TUI expects this exact protocol. Avoid printing human text to stdout from `lusid-apply`; use tracing/logging to stderr.
 
+### Secrets (age-encrypted)
+Project secrets live as individual `*.age` files under `<root>/secrets` and
+are decrypted at the start of `apply` with a single project-scoped
+[`Identity`](./secrets/src/lib.rs). The decrypted values are handed to plans
+via `ctx.secrets.<stem>`. Invariants:
+
+- Decryption is **eager** — every `*.age` file is decrypted up-front so the
+  [`Redactor`](./secrets/src/lib.rs) has a complete table regardless of which
+  secrets a given plan happens to touch.
+- Plaintexts live in `Secret = Arc<SecretBox<String>>` (the `secrecy` crate).
+  Don't clone them into plain `String` fields on long-lived types; don't log
+  them via structured fields.
+- **Missing secret** (`ctx.secrets.<name>` where `<name>` wasn't loaded) is
+  `Null` rather than a validation error — typos silently propagate. Live
+  with it for now; see `Note(cc)` in `plan/src/eval.rs`.
+- **Short secrets are not redacted.** `Secrets::redactor()` skips anything
+  below `REDACT_MIN_LEN` (8) — substring-matching `"ab"` against arbitrary
+  process output is worse than leaving it.
+- `lusid-apply` runs **locally only** today. `dev apply` / `remote apply`
+  intentionally do not forward identity/secrets_dir to the guest. See
+  `TODO(cc)`s in `lusid/src/lib.rs` and `secrets/src/lib.rs` for the three
+  candidate strategies before enabling those paths.
+
 
 ## Build / run / test (agent checklist)
 
@@ -101,7 +124,10 @@ The `lusid` TUI expects this exact protocol. Avoid printing human text to stdout
 
 This project runs privileged operations (`sudo apt-get`, `sudo pacman`, filesystem ownership changes). When adding new operations:
 - Ensure commands are non-interactive.
-- Avoid leaking secrets in logs/structured UI updates.
+- Avoid leaking secrets in logs/structured UI updates. The per-operation
+  stdout/stderr stream is run through [`Redactor`](./secrets/src/lib.rs)
+  before emit — this is best-effort substring scrubbing, not a guarantee,
+  so don't *design* new operations to place secrets on stdout.
 - Keep stdout/stderr streaming for long-running commands.
 
 ## Reviews

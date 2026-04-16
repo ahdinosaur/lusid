@@ -398,13 +398,7 @@ impl Resource {
                 .await
             }
             Resource::User(resource) => {
-                typed::<User>(
-                    ctx,
-                    resource,
-                    ResourceState::User,
-                    ResourceStateError::User,
-                )
-                .await
+                typed::<User>(ctx, resource, ResourceState::User, ResourceStateError::User).await
             }
         }
     }

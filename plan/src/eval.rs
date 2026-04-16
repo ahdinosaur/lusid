@@ -1,10 +1,21 @@
-//! Evaluate a plan's `setup(params, system)` Rimu function into a list of `PlanItem`s.
+//! Evaluate a plan's `setup(params, ctx)` Rimu function into a list of `PlanItem`s.
+//!
+//! `ctx` is a Rimu object of the form `{ system, secrets }`. Plans destructure
+//! it as `ctx.system.*` / `ctx.secrets.*`.
+//!
+//! Note(cc): `ctx.secrets.<name>` is `Null` when `<name>` is not loaded — not
+//! a validation error. This matches "no secret" ergonomically but means typos
+//! silently propagate. A future improvement would be to record referenced
+//! names and warn, or to type `ctx.secrets` as a strict map that errors on
+//! unknown keys.
 
 use displaydoc::Display;
 use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};
+use lusid_secrets::Secrets;
 use lusid_system::System;
-use rimu::{SourceId, Span, Spanned, Value, call};
+use rimu::{SourceId, Span, Spanned, Value, ValueObject, call};
 use rimu_interop::{FromRimu, to_rimu};
+use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use crate::model::{IntoPlanItemError, PlanItem, SetupFunction};
@@ -27,8 +38,11 @@ pub enum EvalError {
     InvalidPlanItem(Box<Spanned<IntoPlanItemError>>),
 }
 
-/// Call the plan's `setup` function with `(params, system)` and parse its returned list
+/// Call the plan's `setup` function with `(params, ctx)` and parse its returned list
 /// into [`PlanItem`]s.
+///
+/// `ctx` is synthesised here as a Rimu object bundling runtime inputs the plan can
+/// destructure — `{ system, secrets }`.
 ///
 /// `params_value` is `None` when the caller provided no params — in that case the first
 /// arg is `Null` (rather than e.g. an empty object, to match what a plan's `setup` sees
@@ -38,22 +52,44 @@ pub(crate) fn evaluate(
     params_value: Option<Spanned<Value>>,
     params_struct: Option<ParamsStruct>,
     system: &System,
+    secrets: &Secrets,
 ) -> Result<Vec<Spanned<PlanItem>>, EvalError> {
     let (setup, setup_span) = setup.take();
 
+    let empty_span = Span::new(SourceId::empty(), 0, 0);
+
     let system_value = to_rimu(system, SourceId::empty())?;
+
+    let secrets_value = {
+        let mut map: ValueObject = Default::default();
+        for (name, secret) in secrets.iter() {
+            map.insert(
+                name.to_string(),
+                Spanned::new(
+                    Value::String(secret.expose_secret().clone()),
+                    empty_span.clone(),
+                ),
+            );
+        }
+        Spanned::new(Value::Object(map), empty_span.clone())
+    };
+
+    let ctx_value = {
+        let mut map: ValueObject = Default::default();
+        map.insert("system".to_string(), system_value);
+        map.insert("secrets".to_string(), secrets_value);
+        Spanned::new(Value::Object(map), empty_span.clone())
+    };
+
     let args = match params_value {
-        None => vec![
-            Spanned::new(Value::Null, Span::new(SourceId::empty(), 0, 0)),
-            system_value,
-        ],
+        None => vec![Spanned::new(Value::Null, empty_span), ctx_value],
         Some(params_value) => {
             let params_struct =
                 params_struct.expect("params struct should exist if params value exists");
             let param_values = ParamValues::from_rimu_spanned(params_value, params_struct)
                 .map_err(|error| EvalError::Params(Box::new(error)))?;
             let value = ParamValues::into_rimu_spanned(param_values);
-            vec![value, system_value]
+            vec![value, ctx_value]
         }
     };
 

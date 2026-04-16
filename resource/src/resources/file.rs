@@ -9,9 +9,10 @@ use lusid_operation::{
     Operation,
     operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{ParamField, ParamType, ParamTypes, Secret};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -22,6 +23,13 @@ use crate::ResourceType;
 pub enum FileParams {
     Source {
         source: FilePath,
+        path: FilePath,
+        mode: Option<FileMode>,
+        user: Option<FileUser>,
+        group: Option<FileGroup>,
+    },
+    Contents {
+        contents: Secret,
         path: FilePath,
         mode: Option<FileMode>,
         user: Option<FileUser>,
@@ -53,6 +61,7 @@ impl Display for FileParams {
             FileParams::Source { source, path, .. } => {
                 write!(f, "Source(source={source}, path={path})")
             }
+            FileParams::Contents { path, .. } => write!(f, "Contents(path={path})"),
             FileParams::File { path, .. } => write!(f, "File(path={path})"),
             FileParams::FileAbsent { path } => write!(f, "FileAbsent(path={path})"),
             FileParams::Directory { path, .. } => write!(f, "Directory(path={path})"),
@@ -66,6 +75,7 @@ impl_display_render!(FileParams);
 #[derive(Debug, Clone)]
 pub enum FileResource {
     FileSource { source: FilePath, path: FilePath },
+    FileContents { contents: Secret, path: FilePath },
     FilePresent { path: FilePath },
     FileAbsent { path: FilePath },
     DirectoryPresent { path: FilePath },
@@ -80,6 +90,9 @@ impl Display for FileResource {
         match self {
             FileResource::FileSource { source, path } => {
                 write!(f, "FileSource({source} -> {path})")
+            }
+            FileResource::FileContents { path, .. } => {
+                write!(f, "FileContents(<redacted> -> {path})")
             }
             FileResource::FilePresent { path } => write!(f, "FilePresent({path})"),
             FileResource::FileAbsent { path } => write!(f, "FileAbsent({path})"),
@@ -229,6 +242,14 @@ impl ResourceType for File {
                   "group".to_string() => field(ParamType::String, false),
                 },
                 indexmap! {
+                  "type".to_string() => field(ParamType::Literal("contents".into()), true),
+                  "contents".to_string() => field(ParamType::Secret, true),
+                  "path".to_string() => field(ParamType::TargetPath, true),
+                  "mode".to_string() => field(ParamType::Number, false),
+                  "user".to_string() => field(ParamType::String, false),
+                  "group".to_string() => field(ParamType::String, false),
+                },
+                indexmap! {
                   "type".to_string() => field(ParamType::Literal("file".into()), true),
                   "path".to_string() => field(ParamType::TargetPath, true),
                   "mode".to_string() => field(ParamType::Number, false),
@@ -271,6 +292,51 @@ impl ResourceType for File {
                     CausalityMeta::id("file".into()),
                     FileResource::FileSource {
                         source,
+                        path: path.clone(),
+                    },
+                )];
+
+                if let Some(mode) = mode {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::requires(vec!["file".into()]),
+                        FileResource::Mode {
+                            path: path.clone(),
+                            mode,
+                        },
+                    ));
+                }
+
+                if let Some(user) = user {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::requires(vec!["file".into()]),
+                        FileResource::User {
+                            path: path.clone(),
+                            user,
+                        },
+                    ))
+                }
+
+                if let Some(group) = group {
+                    nodes.push(CausalityTree::leaf(
+                        CausalityMeta::requires(vec!["file".into()]),
+                        FileResource::Group { path, group },
+                    ));
+                }
+
+                nodes
+            }
+
+            FileParams::Contents {
+                contents,
+                path,
+                mode,
+                user,
+                group,
+            } => {
+                let mut nodes = vec![CausalityTree::leaf(
+                    CausalityMeta::id("file".into()),
+                    FileResource::FileContents {
+                        contents,
                         path: path.clone(),
                     },
                 )];
@@ -421,6 +487,19 @@ impl ResourceType for File {
                 }
             }
 
+            FileResource::FileContents { contents, path } => {
+                if !fs::path_exists(path.as_path()).await? {
+                    FileState::FileNotSourced
+                } else {
+                    let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
+                    if path_contents.as_slice() == contents.expose_secret().as_bytes() {
+                        FileState::FileSourced
+                    } else {
+                        FileState::FileNotSourced
+                    }
+                }
+            }
+
             FileResource::FilePresent { path } | FileResource::FileAbsent { path } => {
                 if fs::path_exists(path.as_path()).await? {
                     FileState::FilePresent
@@ -495,6 +574,15 @@ impl ResourceType for File {
             }
 
             (FileResource::FileSource { .. }, FileState::FileSourced) => None,
+
+            (FileResource::FileContents { contents, path }, FileState::FileNotSourced) => {
+                Some(FileChange::WriteFile {
+                    path: path.clone(),
+                    source: FileSource::Contents(contents.expose_secret().as_bytes().to_vec()),
+                })
+            }
+
+            (FileResource::FileContents { .. }, FileState::FileSourced) => None,
 
             (FileResource::FilePresent { path }, FileState::FileAbsent) => {
                 Some(FileChange::WriteFile {
