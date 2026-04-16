@@ -7,8 +7,11 @@
 //! - A [`Command::sudo`] helper that rewraps the command under `sudo -n`, preserving
 //!   explicitly-set env vars and the working directory.
 //! - Uniform `CommandError` variants for the common failure modes.
-//! - [`Command::handle`] for commands where a non-zero exit is meaningful (e.g. the
-//!   `command` resource's `is_installed` check), not strictly an error.
+//! - [`Command::handle`] for commands where success and failure both produce the
+//!   same value type (e.g. apt's `dpkg-query` check classifying a package as
+//!   installed or not).
+//! - [`Command::outcome`] for commands where the caller wants to branch on the
+//!   exit status itself (e.g. `getent` returning non-zero for an absent name).
 //! - [`Command::from_str`] parses shell-style argument strings via `shell-words`, so
 //!   plan authors can write a single string instead of a vector.
 //
@@ -220,6 +223,13 @@ pub struct CommandOutput {
     pub status: Pin<Box<dyn Future<Output = Result<ExitStatus, CommandError>> + Send + 'static>>,
 }
 
+/// Buffered result of a command run to completion. Produced by [`Command::outcome`].
+pub struct CommandOutcome {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
 impl Command {
     pub async fn output(&mut self) -> Result<CommandOutput, CommandError> {
         // NOTE (mw): we use spawn() because output() doesn't work
@@ -248,6 +258,33 @@ impl Command {
             stdout,
             stderr,
             status,
+        })
+    }
+
+    /// Run the command to completion and return the exit status plus fully-captured
+    /// stdout and stderr. Use when a non-zero exit carries information the caller
+    /// wants to branch on directly — e.g. `getent` returns non-zero for an absent
+    /// name. Unlike [`Self::handle`], the success and failure paths don't need to
+    /// share a return type; unlike [`Self::run`], non-zero exits are not errors.
+    pub async fn outcome(&mut self) -> Result<CommandOutcome, CommandError> {
+        let mut output = self.output().await?;
+        let status = output.status.await?;
+        let mut stdout = Vec::new();
+        output
+            .stdout
+            .read_to_end(&mut stdout)
+            .await
+            .map_err(CommandError::ReadStdout)?;
+        let mut stderr = Vec::new();
+        output
+            .stderr
+            .read_to_end(&mut stderr)
+            .await
+            .map_err(CommandError::ReadStderr)?;
+        Ok(CommandOutcome {
+            status,
+            stdout,
+            stderr,
         })
     }
 

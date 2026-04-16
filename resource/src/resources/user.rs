@@ -487,24 +487,17 @@ struct PasswdEntry {
 }
 
 /// Read a single user from the NSS passwd database. `None` if the user doesn't exist
-/// (which `getent` signals by exiting non-zero with empty stderr).
+/// (which `getent` signals by exiting non-zero).
 async fn get_passwd_entry(name: &str) -> Result<Option<PasswdEntry>, UserStateError> {
-    let output = Command::new("getent")
+    let outcome = Command::new("getent")
         .args(["passwd", name])
-        .handle(
-            |stdout| -> Result<Option<String>, UserStateError> {
-                Ok(Some(String::from_utf8_lossy(stdout).to_string()))
-            },
-            |_stderr| -> Result<Option<Option<String>>, UserStateError> {
-                // getent exits non-zero with no output when the entry is missing.
-                Ok(Some(None))
-            },
-        )
-        .await??;
-
-    let Some(stdout) = output else {
+        .outcome()
+        .await?;
+    if !outcome.status.success() {
         return Ok(None);
-    };
+    }
+
+    let stdout = String::from_utf8_lossy(&outcome.stdout);
 
     // passwd format: name:password:uid:gid:gecos:home:shell
     // Note(cc): the GECOS field itself can contain commas (full name, office, phone, etc.)
@@ -513,7 +506,7 @@ async fn get_passwd_entry(name: &str) -> Result<Option<PasswdEntry>, UserStateEr
     let parts: Vec<&str> = line.splitn(7, ':').collect();
     if parts.len() < 7 {
         return Err(UserStateError::ParsePasswd {
-            output: stdout,
+            output: stdout.into_owned(),
         });
     }
 
@@ -541,25 +534,23 @@ async fn get_passwd_entry(name: &str) -> Result<Option<PasswdEntry>, UserStateEr
 
 /// Resolve a numeric gid to its group name via `getent group <gid>`.
 async fn get_group_name_for_gid(gid: u32) -> Result<Option<String>, UserStateError> {
-    let output = Command::new("getent")
+    let outcome = Command::new("getent")
         .args(["group", &gid.to_string()])
-        .handle(
-            |stdout| -> Result<Option<String>, UserStateError> {
-                Ok(Some(String::from_utf8_lossy(stdout).to_string()))
-            },
-            |_stderr| -> Result<Option<Option<String>>, UserStateError> { Ok(Some(None)) },
-        )
-        .await??;
-
-    let Some(stdout) = output else {
+        .outcome()
+        .await?;
+    if !outcome.status.success() {
         return Ok(None);
-    };
+    }
+
+    let stdout = String::from_utf8_lossy(&outcome.stdout);
 
     // group format: name:password:gid:members
     let line = stdout.lines().next().unwrap_or("");
     let name = line.split(':').next().unwrap_or("");
     if name.is_empty() {
-        return Err(UserStateError::ParseGroup { output: stdout });
+        return Err(UserStateError::ParseGroup {
+            output: stdout.into_owned(),
+        });
     }
     Ok(Some(name.to_string()))
 }
