@@ -39,6 +39,7 @@ use crate::operations::{
     command::{Command, CommandOperation},
     file::{File, FileOperation},
     git::{Git, GitOperation},
+    group::{Group, GroupOperation},
     pacman::{Pacman, PacmanOperation},
     systemd::{Systemd, SystemdOperation},
     user::{User, UserOperation},
@@ -90,6 +91,7 @@ pub enum Operation {
     Git(GitOperation),
     Systemd(SystemdOperation),
     User(UserOperation),
+    Group(GroupOperation),
 }
 
 impl Operation {
@@ -108,6 +110,7 @@ impl Operation {
             git,
             systemd,
             user,
+            group,
         } = partition_by_type(operations);
 
         std::iter::empty()
@@ -119,6 +122,7 @@ impl Operation {
             .chain(Git::merge(git).into_iter().map(Operation::Git))
             .chain(Systemd::merge(systemd).into_iter().map(Operation::Systemd))
             .chain(User::merge(user).into_iter().map(Operation::User))
+            .chain(Group::merge(group).into_iter().map(Operation::Group))
             .collect()
     }
 }
@@ -149,6 +153,9 @@ pub enum OperationApplyError {
 
     #[error("user operation failed: {0:?}")]
     User(<User as OperationType>::ApplyError),
+
+    #[error("group operation failed: {0:?}")]
+    Group(<Group as OperationType>::ApplyError),
 }
 
 /// Unified completion future for any operation. `Future::poll` forwards to the active
@@ -163,6 +170,7 @@ pub enum OperationApplyOutput {
     Git(#[pin] <Git as OperationType>::ApplyOutput),
     Systemd(#[pin] <Systemd as OperationType>::ApplyOutput),
     User(#[pin] <User as OperationType>::ApplyOutput),
+    Group(#[pin] <Group as OperationType>::ApplyOutput),
 }
 
 impl Future for OperationApplyOutput {
@@ -179,6 +187,7 @@ impl Future for OperationApplyOutput {
             Git(fut) => fut.poll(cx).map_err(OperationApplyError::Git),
             Systemd(fut) => fut.poll(cx).map_err(OperationApplyError::Systemd),
             User(fut) => fut.poll(cx).map_err(OperationApplyError::User),
+            Group(fut) => fut.poll(cx).map_err(OperationApplyError::Group),
         }
     }
 }
@@ -195,6 +204,7 @@ pub enum OperationApplyStdout {
     Git(#[pin] <Git as OperationType>::ApplyStdout),
     Systemd(#[pin] <Systemd as OperationType>::ApplyStdout),
     User(#[pin] <User as OperationType>::ApplyStdout),
+    Group(#[pin] <Group as OperationType>::ApplyStdout),
 }
 
 impl AsyncRead for OperationApplyStdout {
@@ -213,6 +223,7 @@ impl AsyncRead for OperationApplyStdout {
             Git(stream) => stream.poll_read(cx, buf),
             Systemd(stream) => stream.poll_read(cx, buf),
             User(stream) => stream.poll_read(cx, buf),
+            Group(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -229,6 +240,7 @@ pub enum OperationApplyStderr {
     Git(#[pin] <Git as OperationType>::ApplyStderr),
     Systemd(#[pin] <Systemd as OperationType>::ApplyStderr),
     User(#[pin] <User as OperationType>::ApplyStderr),
+    Group(#[pin] <Group as OperationType>::ApplyStderr),
 }
 
 impl AsyncRead for OperationApplyStderr {
@@ -247,6 +259,7 @@ impl AsyncRead for OperationApplyStderr {
             Git(stream) => stream.poll_read(cx, buf),
             Systemd(stream) => stream.poll_read(cx, buf),
             User(stream) => stream.poll_read(cx, buf),
+            Group(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -347,6 +360,16 @@ impl Operation {
                     OperationApplyStderr::User(stderr),
                 ))
             }
+            Operation::Group(op) => {
+                let (output, stdout, stderr) = Group::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::Group)?;
+                Ok((
+                    OperationApplyOutput::Group(output),
+                    OperationApplyStdout::Group(stdout),
+                    OperationApplyStderr::Group(stderr),
+                ))
+            }
         }
     }
 }
@@ -363,6 +386,7 @@ impl Display for Operation {
             Git(op) => Display::fmt(op, f),
             Systemd(op) => Display::fmt(op, f),
             User(op) => Display::fmt(op, f),
+            Group(op) => Display::fmt(op, f),
         }
     }
 }
@@ -379,6 +403,7 @@ impl Render for Operation {
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -394,6 +419,7 @@ pub struct OperationsByType {
     git: Vec<GitOperation>,
     systemd: Vec<SystemdOperation>,
     user: Vec<UserOperation>,
+    group: Vec<GroupOperation>,
 }
 
 /// Bucket a mixed iterator of operations into per-family vectors.
@@ -406,6 +432,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     let mut git: Vec<GitOperation> = Vec::new();
     let mut systemd: Vec<SystemdOperation> = Vec::new();
     let mut user: Vec<UserOperation> = Vec::new();
+    let mut group: Vec<GroupOperation> = Vec::new();
     for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
@@ -416,6 +443,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
             Operation::Git(op) => git.push(op),
             Operation::Systemd(op) => systemd.push(op),
             Operation::User(op) => user.push(op),
+            Operation::Group(op) => group.push(op),
         }
     }
     OperationsByType {
@@ -427,5 +455,6 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
         git,
         systemd,
         user,
+        group,
     }
 }
