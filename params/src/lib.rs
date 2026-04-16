@@ -727,6 +727,10 @@ fn validate_type(
         }
 
         ParamType::Secret => match value_inner {
+            // Note(cc): empty-string secrets pass — a secret file can legitimately
+            // contain an empty plaintext (rare, but not impossible). If we ever want
+            // to reject this, do it here with a dedicated error variant rather than
+            // reusing `NullSecret` (which speaks specifically about typo-on-lookup).
             Value::String(_) => Ok(()),
             Value::Null => Err(ValidateValueError::NullSecret {
                 expected_type: Box::new(param_type.clone()),

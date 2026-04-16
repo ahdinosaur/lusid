@@ -197,6 +197,12 @@ pub const REDACTED: &str = "<redacted>";
 /// - **Emits plaintext briefly** via [`ExposeSecret`] during each call;
 ///   the plaintext is not copied but is borrowed for the length of one
 ///   `String::replace`.
+/// - **Overlapping/adjacent secrets are not reliably caught.** Longest-first
+///   ordering handles the nested case (secret B is a substring of secret A)
+///   but not the interleaved case: if A = "foobar" and B = "barfoo" both
+///   appear in "foobarfoo", only one of them will redact, leaving the
+///   other's plaintext visible. In practice this would need two secrets
+///   that share a suffix/prefix by coincidence; flagging anyway.
 #[derive(Clone)]
 pub struct Redactor {
     secrets: Vec<Secret>,
@@ -293,18 +299,7 @@ pub async fn decrypt_dir(identity: &Identity, dir: &Path) -> Result<Secrets, Dec
                 source,
             })?;
 
-        let plaintext = decrypt_bytes(identity, &ciphertext).map_err(|source| match source {
-            DecryptError::Decrypt { source, .. } => DecryptError::Decrypt {
-                path: path.clone(),
-                source,
-            },
-            DecryptError::DecryptIo { source, .. } => DecryptError::DecryptIo {
-                path: path.clone(),
-                source,
-            },
-            DecryptError::NotUtf8 { .. } => DecryptError::NotUtf8 { path: path.clone() },
-            other => other,
-        })?;
+        let plaintext = decrypt_bytes(identity, &path, &ciphertext)?;
 
         values.insert(stem, plaintext);
     }
@@ -313,15 +308,21 @@ pub async fn decrypt_dir(identity: &Identity, dir: &Path) -> Result<Secrets, Dec
     Ok(Secrets { values })
 }
 
-fn decrypt_bytes(identity: &Identity, ciphertext: &[u8]) -> Result<Secret, DecryptError> {
+/// Decrypt a single age-encrypted payload. `path` is only used to label
+/// failures — the bytes themselves come from `ciphertext`.
+fn decrypt_bytes(
+    identity: &Identity,
+    path: &Path,
+    ciphertext: &[u8],
+) -> Result<Secret, DecryptError> {
     let decryptor = age::Decryptor::new(ciphertext).map_err(|source| DecryptError::Decrypt {
-        path: PathBuf::new(),
+        path: path.to_path_buf(),
         source,
     })?;
     let mut reader = decryptor
         .decrypt(std::iter::once(&identity.inner as &dyn age::Identity))
         .map_err(|source| DecryptError::Decrypt {
-            path: PathBuf::new(),
+            path: path.to_path_buf(),
             source,
         })?;
 
@@ -329,12 +330,12 @@ fn decrypt_bytes(identity: &Identity, ciphertext: &[u8]) -> Result<Secret, Decry
     reader
         .read_to_end(&mut plaintext)
         .map_err(|source| DecryptError::DecryptIo {
-            path: PathBuf::new(),
+            path: path.to_path_buf(),
             source,
         })?;
 
     let plaintext = String::from_utf8(plaintext).map_err(|_| DecryptError::NotUtf8 {
-        path: PathBuf::new(),
+        path: path.to_path_buf(),
     })?;
     Ok(Arc::new(SecretBox::new(Box::new(plaintext))))
 }
