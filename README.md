@@ -132,6 +132,19 @@ Each operation type defines:
 - How to merge multiple operations of the same type
 - How to apply an operation
 
+## Glossary
+
+- **Rimu**: embedded language used for `.lusid` plans.
+- **Spanned**: value annotated with source span for diagnostics.
+- **Plan**: parsed/evaluated Rimu object containing `setup`.
+- **PlanItem**: an entry returned by setup, either core module or nested plan.
+- **ResourceParams**: typed configuration definition (user-facing).
+- **Resource**: atomized resource node(s) derived from params.
+- **State**: observed current system state for a resource.
+- **Change**: computed delta from state to desired.
+- **Operation**: executable action(s) derived from change.
+- **Epoch**: dependency layer computed from causality constraints.
+
 ## Roadmap
 
 - [ ] Implement my complete personal "SnugOS" config

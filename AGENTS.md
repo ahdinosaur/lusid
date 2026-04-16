@@ -22,92 +22,32 @@ Key design themes:
 - Tree-first architecture: nested `Tree` and arena-based `FlatTree`.
 - Dependency ordering via `CausalityMeta { id, requires, required_by }` and Kahn’s algorithm.
 
-## Workspace map (high level)
+## Principles
 
-You’ll mostly touch these crates:
+- Premature optimization is the root of all evil
+- Do not second guess or make assumptions
+- Prefer robustness over performance
+- Achieve performance with simple fit-for-purpose abstractions, not clever hacks
 
-### Planning & parameters
+### Complexity check
 
-- **`plan/`**
-  - `plan()` is the top-level planner.
-  - `load.rs` parses + evaluates Rimu → `Plan`.
-  - `eval.rs` calls the Rimu `setup` function.
-  - `core.rs` maps `@core/*` modules to `lusid_resource` types.
-  - `id.rs` defines `PlanId` and `PlanNodeId` (used for dependencies & display).
-- **`params/`**
-  - Parameter schema types (`ParamTypes`, `ParamType`, `ParamField`)
-  - Parameter values (`ParamValues`, `ParamValue`)
-  - Validation: `validate()` chooses a matching struct/union case and checks values.
+Before adding significant amounts of code, verify:
 
-### Resources & operations
+1. The approach is solid — not just the first thing that came to mind.
+2. No simpler alternative achieves the same goal.
+3. Compare to industry-standard tools and specifications if relevant.
+4. Check if a good Rust crate already handles the task.
 
-- **`resource/`**
-  - `ResourceType` trait: defines params schema, how params expand into resources, state fetching, diffing to changes, and mapping changes to operations.
-  - Implementations: `apt`, `pacman`, `file`.
-- **`operation/`**
-  - Operation merge/apply logic by operation type.
-  - Apply returns: `(Future completion, stdout stream, stderr stream)`.
+Complexity is fine when warranted - this is a genuinely complex project. The point is to be deliberate.
 
-### Apply pipeline + UI streaming
-- **`lusid-apply/`**
-  - Orchestrates the pipeline: plan → resources → state → changes → operations → apply.
-  - Emits `AppUpdate` JSON lines to stdout.
-- **`apply-stdio/`**
-  - Defines `AppUpdate` and `AppView` state machine.
-  - Contains a flat view tree model used by the TUI.
+## Reading order
 
-### CLI, system, infra
-- **`lusid/`**
-  - CLI (`clap`) + config loader (`lusid.toml`) + TUI renderer for `lusid-apply` JSON stream.
-- **`system/`**
-  - Detects local machine info: arch/os/user/hostname.
-- **`vm/`**, **`ssh/`**
-  - Dev/remote workflows: spawn QEMU VMs, sync files, run remote commands, etc.
-- **`tree/`** and **`causality/`**
-  - Generic tree and dependency epoch computation.
-- **`store/`**
-  - Currently only a local file store (`tokio::fs::read`).
-  - `PlanId::Git` is currently **TODO** in `plan/src/id.rs`.
-
-## The end-to-end data flow
-
-If you need a “starting point” file for understanding the runtime behavior, read in this order:
+To understand the runtime behavior, read in this order:
 1. `lusid-apply/src/lib.rs` (full pipeline)
 2. `plan/src/lib.rs` (planning recursion + core modules)
 3. `params/src/lib.rs` (schema/value validation)
 4. `causality/src/epoch.rs` (dependency scheduling)
 5. `lusid/src/tui.rs` (how updates are rendered)
-
-### Planning (Rimu → PlanTree<ResourceParams>)
-Entry point: `lusid_plan::plan(plan_id, params_value, store, system)`
-
-Core steps:
-- Read plan source via `Store::read(StoreItemId)` (currently LocalFile only).
-- `load(code, plan_id)`:
-  - `rimu::parse` → AST
-  - `rimu::evaluate` → `Value`
-  - `Plan::from_rimu_spanned(Value)` → `Spanned<Plan>`
-- `validate(param_types, params_value)` decides which param struct applies (supports union).
-- `evaluate(setup, params_value, params_struct, system)` calls the Rimu setup function.
-- Each returned `PlanItem` becomes:
-  - Core module resource params via `core_module(...)`, or
-  - A nested plan (module treated as relative path) → recursion.
-
-### Apply (PlanTree → Operations → execution)
-Entry: `lusid_apply::apply(ApplyOptions { root_path, plan_id, params_json })`
-
-Pipeline stages emitted as JSON updates:
-1. `ResourceParams`
-2. `ResourcesStart/ResourcesNode/ResourcesComplete`
-3. `ResourceStatesStart/NodeStart/NodeComplete/Complete`
-4. `ResourceChangesStart/Node/Complete(has_changes)`
-5. `OperationsStart/Node/Complete`
-6. `OperationsApplyStart` then per operation: stdout/stderr streaming updates and completion updates
-
-Epoch ordering:
-- `lusid_causality::compute_epochs(CausalityTree<Option<Node>, NodeId>)`
-
----
 
 ## “Gotchas” / invariants to preserve
 
@@ -126,14 +66,6 @@ If you add new path-like types, follow this pattern and be explicit about absolu
 ### Causality IDs must be unique
 `compute_epochs` fails on duplicate IDs across leaves/branches. Any new code generating ids should avoid collisions (or scope them like `map_plan_subitems()` does by minting a `scope_id`).
 
-### FlatTree/arena semantics
-Both `lusid_tree::FlatTree` and `lusid_apply_stdio::FlatViewTree`:
-- Root index is always `0`.
-- Missing nodes (`None`) are tolerated by lenient reconstruction.
-- “Replace subtree” appends new nodes and prunes old descendants by setting them to `None`.
-
-When you change flattening/replacement logic, keep these invariants.
-
 ### Streaming output protocol
 `lusid-apply` emits **newline-delimited JSON** `AppUpdate` messages to stdout.
 The `lusid` TUI expects this exact protocol. Avoid printing human text to stdout from `lusid-apply`; use tracing/logging to stderr.
@@ -150,47 +82,20 @@ The `lusid` TUI expects this exact protocol. Avoid printing human text to stdout
   - `cargo run -p lusid-apply -- --root <root> --plan <path/to/plan.lusid> --log info --params '{"k":"v"}'`
 - Run tests:
   - `cargo test`
-
-If you add new behavior, add tests where they naturally fit:
-- Parameter validation: `params` crate unit tests.
-- OS/system parsing: `system` crate tests (already has some).
-- Epoch computation: `causality` crate tests are appropriate.
+- Lint:
+  - `cargo clippy --workspace -- -D warnings`
+- Format:
+  - `cargo fmt --all`
 
 ## Coding style expectations (match existing code)
 
 - Error handling uses `thiserror` + rich enums; avoid `anyhow`-style catchalls.
 - Many crates use `displaydoc::Display` for error messages; follow that pattern.
+- Use a blank line between each error enum variant.
 - Prefer small pure functions
 - Keep public APIs conservative: prefer adding new types/functions instead of changing signatures.
 - Maintain `Clone` friendliness when types are used in trees/flat arenas.
-
----
-
-## Where to make common changes
-
-### Add a new core module resource (e.g. `@core/service`)
-1. Implement a new `ResourceType` in `resource/src/resources/<new>.rs`
-2. Add it to:
-   - `resource/src/resources/mod.rs`
-   - `resource/src/lib.rs` enums: `ResourceParams`, `Resource`, `ResourceState`, `ResourceChange`, plus matching logic
-3. Add core mapping in `plan/src/core.rs`:
-   - `match core_module_id { New::ID => ... }`
-4. Add operations in `operation/` if needed.
-
-### Add new parameter types or validation rules
-- `params/src/lib.rs` is the single source of truth.
-- Update:
-  - `ParamType` / `ParamValue` conversions
-  - `validate_type` rules
-  - `FromRimu` parsing for schemas
-- Add tests for:
-  - Correct match
-  - Mismatch errors include useful spans
-
-### Add store backends (git/http/etc.)
-- Extend `StoreItemId` and `Store` in `store/`.
-- Implement a `SubStore` with cache directory support.
-- Update `PlanId -> StoreItemId` conversion in `plan/src/id.rs`.
+- Import order: std, external crates, internal crates (`lusid_*`), within crate (`crate::`/`self::`/`super::`), with a blank line between each group.
 
 ## Safety and operational concerns
 
@@ -199,18 +104,34 @@ This project runs privileged operations (`sudo apt-get`, `sudo pacman`, filesyst
 - Avoid leaking secrets in logs/structured UI updates.
 - Keep stdout/stderr streaming for long-running commands.
 
-## Quick glossary
+## Reviews
 
-- **Rimu**: embedded language used for `.lusid` plans.
-- **Spanned**: value annotated with source span for diagnostics.
-- **Plan**: parsed/evaluated Rimu object containing `setup`.
-- **PlanItem**: an entry returned by setup, either core module or nested plan.
-- **ResourceParams**: typed configuration definition (user-facing).
-- **Resource**: atomized resource node(s) derived from params.
-- **State**: observed current system state for a resource.
-- **Change**: computed delta from state to desired.
-- **Operation**: executable action(s) derived from change.
-- **Epoch**: dependency layer computed from causality constraints.
+- Think about the long-term maintenance of the project
+- Check all algorithms are correct
+  - Look at relevant specifications where possible
+- Check all unsafe usage is correct (and documented with SAFETY comments)
+- Check there's not a simpler way to do (or say) what is needed
+- Imagine alternative abstractions, compare with current abstractions
+- Add `debug_assert!` to validate any assumptions
+- Add more tests, but only if useful
+- For any observations that don't lead to a change now:
+  - Make a comment `Note(cc): xxx` to document for future readers,
+  - Or `TODO(cc): xxx` if we should make a change in the future
+
+## Testing
+
+- Don't assume the current code is correct
+  - Don't ever fix a test in order to pass, unless you are absolutely certain this is correct
+- Before adding tests, think about specific edge cases that should be tested
+  - Don't add tests just for the sake of adding tests
+- If a test is redundant, remove it
+
+## Tracing
+
+- Use `tracing::instrument` or manual spans where they add context.
+- Use all levels deliberately: `error!` for breakage, `warn!` for degraded-but-recoverable, `info!` for lifecycle events, `debug!` for operational detail, `trace!` for per-frame/hot-path detail.
+- Prefer structured fields (`info!(plan_id = %id, "planning complete")`) over string interpolation.
+- Write log messages as if you will read them at 3 AM debugging a production issue two years from now.
 
 ## Before submitting changes (AI agent self-check)
 
@@ -221,15 +142,3 @@ This project runs privileged operations (`sudo apt-get`, `sudo pacman`, filesyst
 - Are new operations safe/non-interactive and appropriately `sudo()`-wrapped?
 - Did you add/adjust tests for logic-heavy changes?
 
-## 5) What is unfinished / likely tasks
-
-Known TODOs visible from the code you were given:
-- `PlanId::Git` conversion to `StoreItemId` is `todo!()` (git-backed store not implemented).
-- `lusid` CLI remote workflows:
-  - `cmd_remote_apply`, `cmd_remote_ssh` are `todo!()`.
-- There is some duplication between `lusid_http` and `vm/src/http.rs` (two HTTP clients with similar code).
-- Expect ongoing iteration in parameter schema/validation and plan evaluation.
-
-When implementing these:
-- Prefer extending `store/` with a new `SubStore` rather than embedding fetch logic in planning.
-- Keep the plan loading interface stable: `Store::read(StoreItemId)` → `Vec<u8>`.
