@@ -28,8 +28,7 @@ pub enum UserParams {
         name: String,
         uid: Option<u32>,
         group: Option<String>,
-        groups: Option<Vec<String>>,
-        append_groups: Option<bool>,
+        extra_groups: Option<Vec<String>>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -61,8 +60,7 @@ pub enum UserResource {
         name: String,
         uid: Option<u32>,
         group: Option<String>,
-        groups: Option<Vec<String>>,
-        append_groups: bool,
+        extra_groups: Option<Vec<String>>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -94,7 +92,7 @@ pub enum UserState {
     Present {
         uid: u32,
         primary_group: String,
-        groups: Vec<String>,
+        extra_groups: Vec<String>,
         comment: String,
         home: String,
         shell: String,
@@ -216,8 +214,7 @@ impl ResourceType for User {
                     "name".to_string() => field(ParamType::String, true),
                     "uid".to_string() => field(ParamType::Number, false),
                     "group".to_string() => field(ParamType::String, false),
-                    "groups".to_string() => field(string_list(), false),
-                    "append_groups".to_string() => field(ParamType::Boolean, false),
+                    "extra_groups".to_string() => field(string_list(), false),
                     "comment".to_string() => field(ParamType::String, false),
                     "home".to_string() => field(ParamType::TargetPath, false),
                     "shell".to_string() => field(ParamType::String, false),
@@ -243,8 +240,7 @@ impl ResourceType for User {
                 name,
                 uid,
                 group,
-                groups,
-                append_groups,
+                extra_groups,
                 comment,
                 home,
                 shell,
@@ -254,8 +250,7 @@ impl ResourceType for User {
                 name,
                 uid,
                 group,
-                groups,
-                append_groups: append_groups.unwrap_or(false),
+                extra_groups,
                 comment,
                 home,
                 shell,
@@ -293,12 +288,12 @@ impl ResourceType for User {
             .await?
             .unwrap_or_default();
 
-        let groups = get_supplementary_groups(name, &primary_group).await?;
+        let extra_groups = get_supplementary_groups(name, &primary_group).await?;
 
         Ok(UserState::Present {
             uid: passwd_entry.uid,
             primary_group,
-            groups,
+            extra_groups,
             comment: passwd_entry.comment,
             home: passwd_entry.home,
             shell: passwd_entry.shell,
@@ -324,10 +319,7 @@ impl ResourceType for User {
                     name,
                     uid,
                     group,
-                    groups,
-                    // Note(cc): `append_groups` only matters when reconciling against an
-                    // existing user — a fresh account gets exactly the declared groups.
-                    append_groups: _,
+                    extra_groups,
                     comment,
                     home,
                     shell,
@@ -339,7 +331,7 @@ impl ResourceType for User {
                 name: name.clone(),
                 uid: *uid,
                 primary_group: group.clone(),
-                supplementary_groups: groups.clone().unwrap_or_default(),
+                supplementary_groups: extra_groups.clone().unwrap_or_default(),
                 comment: comment.clone(),
                 home: home.clone(),
                 shell: shell.clone(),
@@ -352,8 +344,7 @@ impl ResourceType for User {
                     name,
                     uid,
                     group,
-                    groups,
-                    append_groups,
+                    extra_groups,
                     comment,
                     home,
                     shell,
@@ -363,7 +354,7 @@ impl ResourceType for User {
                 UserState::Present {
                     uid: current_uid,
                     primary_group: current_primary_group,
-                    groups: current_groups,
+                    extra_groups: current_extra_groups,
                     comment: current_comment,
                     home: current_home,
                     shell: current_shell,
@@ -376,21 +367,12 @@ impl ResourceType for User {
                     .filter(|declared| declared.as_str() != current_primary_group.as_str())
                     .cloned();
 
-                let groups_change = groups.as_ref().and_then(|declared| {
+                let extra_groups_change = extra_groups.as_ref().and_then(|declared| {
                     let current: BTreeSet<&str> =
-                        current_groups.iter().map(String::as_str).collect();
+                        current_extra_groups.iter().map(String::as_str).collect();
                     let declared_set: BTreeSet<&str> =
                         declared.iter().map(String::as_str).collect();
-
-                    if *append_groups {
-                        if declared_set.is_subset(&current) {
-                            None
-                        } else {
-                            let merged: BTreeSet<&str> =
-                                current.union(&declared_set).copied().collect();
-                            Some(merged.into_iter().map(str::to_string).collect())
-                        }
-                    } else if declared_set == current {
+                    if declared_set == current {
                         None
                     } else {
                         Some(declared.clone())
@@ -414,7 +396,7 @@ impl ResourceType for User {
 
                 if uid_change.is_none()
                     && group_change.is_none()
-                    && groups_change.is_none()
+                    && extra_groups_change.is_none()
                     && comment_change.is_none()
                     && home_change.is_none()
                     && shell_change.is_none()
@@ -425,7 +407,7 @@ impl ResourceType for User {
                         name: name.clone(),
                         uid: uid_change,
                         primary_group: group_change,
-                        supplementary_groups: groups_change,
+                        supplementary_groups: extra_groups_change,
                         comment: comment_change,
                         home: home_change,
                         shell: shell_change,
