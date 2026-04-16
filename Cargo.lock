@@ -2199,6 +2199,7 @@ dependencies = [
  "lusid-cmd",
  "lusid-ctx",
  "lusid-fs",
+ "lusid-http",
  "lusid-view",
  "pin-project",
  "serde",

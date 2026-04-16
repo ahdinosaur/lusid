@@ -35,10 +35,12 @@ pub mod operations;
 
 use crate::operations::{
     apt::{Apt, AptOperation},
+    apt_repo::{AptRepo, AptRepoOperation},
     command::{Command, CommandOperation},
     file::{File, FileOperation},
     git::{Git, GitOperation},
     pacman::{Pacman, PacmanOperation},
+    systemd::{Systemd, SystemdOperation},
     user::{User, UserOperation},
 };
 
@@ -81,10 +83,12 @@ pub trait OperationType {
 #[derive(Debug, Clone)]
 pub enum Operation {
     Apt(AptOperation),
+    AptRepo(AptRepoOperation),
     Pacman(PacmanOperation),
     File(FileOperation),
     Command(CommandOperation),
     Git(GitOperation),
+    Systemd(SystemdOperation),
     User(UserOperation),
 }
 
@@ -97,19 +101,23 @@ impl Operation {
     pub fn merge(operations: impl IntoIterator<Item = Operation>) -> Vec<Operation> {
         let OperationsByType {
             apt,
+            apt_repo,
             pacman,
             file,
             command,
             git,
+            systemd,
             user,
         } = partition_by_type(operations);
 
         std::iter::empty()
             .chain(Apt::merge(apt).into_iter().map(Operation::Apt))
+            .chain(AptRepo::merge(apt_repo).into_iter().map(Operation::AptRepo))
             .chain(Pacman::merge(pacman).into_iter().map(Operation::Pacman))
             .chain(File::merge(file).into_iter().map(Operation::File))
             .chain(Command::merge(command).into_iter().map(Operation::Command))
             .chain(Git::merge(git).into_iter().map(Operation::Git))
+            .chain(Systemd::merge(systemd).into_iter().map(Operation::Systemd))
             .chain(User::merge(user).into_iter().map(Operation::User))
             .collect()
     }
@@ -120,6 +128,9 @@ impl Operation {
 pub enum OperationApplyError {
     #[error("apt operation failed: {0:?}")]
     Apt(<Apt as OperationType>::ApplyError),
+
+    #[error("apt-repo operation failed: {0:?}")]
+    AptRepo(<AptRepo as OperationType>::ApplyError),
 
     #[error("pacman operation failed: {0:?}")]
     Pacman(<Pacman as OperationType>::ApplyError),
@@ -133,6 +144,9 @@ pub enum OperationApplyError {
     #[error("git operation failed: {0:?}")]
     Git(<Git as OperationType>::ApplyError),
 
+    #[error("systemd operation failed: {0:?}")]
+    Systemd(<Systemd as OperationType>::ApplyError),
+
     #[error("user operation failed: {0:?}")]
     User(<User as OperationType>::ApplyError),
 }
@@ -142,10 +156,12 @@ pub enum OperationApplyError {
 #[pin_project(project = OperationApplyOutputProject)]
 pub enum OperationApplyOutput {
     Apt(#[pin] <Apt as OperationType>::ApplyOutput),
+    AptRepo(#[pin] <AptRepo as OperationType>::ApplyOutput),
     Pacman(#[pin] <Pacman as OperationType>::ApplyOutput),
     File(#[pin] <File as OperationType>::ApplyOutput),
     Command(#[pin] <Command as OperationType>::ApplyOutput),
     Git(#[pin] <Git as OperationType>::ApplyOutput),
+    Systemd(#[pin] <Systemd as OperationType>::ApplyOutput),
     User(#[pin] <User as OperationType>::ApplyOutput),
 }
 
@@ -156,10 +172,12 @@ impl Future for OperationApplyOutput {
         use OperationApplyOutputProject::*;
         match self.project() {
             Apt(fut) => fut.poll(cx).map_err(OperationApplyError::Apt),
+            AptRepo(fut) => fut.poll(cx).map_err(OperationApplyError::AptRepo),
             Pacman(fut) => fut.poll(cx).map_err(OperationApplyError::Pacman),
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
             Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
             Git(fut) => fut.poll(cx).map_err(OperationApplyError::Git),
+            Systemd(fut) => fut.poll(cx).map_err(OperationApplyError::Systemd),
             User(fut) => fut.poll(cx).map_err(OperationApplyError::User),
         }
     }
@@ -170,10 +188,12 @@ impl Future for OperationApplyOutput {
 #[pin_project(project = OperationApplyStdoutProject)]
 pub enum OperationApplyStdout {
     Apt(#[pin] <Apt as OperationType>::ApplyStdout),
+    AptRepo(#[pin] <AptRepo as OperationType>::ApplyStdout),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStdout),
     File(#[pin] <File as OperationType>::ApplyStdout),
     Command(#[pin] <Command as OperationType>::ApplyStdout),
     Git(#[pin] <Git as OperationType>::ApplyStdout),
+    Systemd(#[pin] <Systemd as OperationType>::ApplyStdout),
     User(#[pin] <User as OperationType>::ApplyStdout),
 }
 
@@ -186,10 +206,12 @@ impl AsyncRead for OperationApplyStdout {
         use OperationApplyStdoutProject::*;
         match self.project() {
             Apt(stream) => stream.poll_read(cx, buf),
+            AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
+            Systemd(stream) => stream.poll_read(cx, buf),
             User(stream) => stream.poll_read(cx, buf),
         }
     }
@@ -200,10 +222,12 @@ impl AsyncRead for OperationApplyStdout {
 #[pin_project(project = OperationApplyStderrProject)]
 pub enum OperationApplyStderr {
     Apt(#[pin] <Apt as OperationType>::ApplyStderr),
+    AptRepo(#[pin] <AptRepo as OperationType>::ApplyStderr),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStderr),
     File(#[pin] <File as OperationType>::ApplyStderr),
     Command(#[pin] <Command as OperationType>::ApplyStderr),
     Git(#[pin] <Git as OperationType>::ApplyStderr),
+    Systemd(#[pin] <Systemd as OperationType>::ApplyStderr),
     User(#[pin] <User as OperationType>::ApplyStderr),
 }
 
@@ -216,10 +240,12 @@ impl AsyncRead for OperationApplyStderr {
         use OperationApplyStderrProject::*;
         match self.project() {
             Apt(stream) => stream.poll_read(cx, buf),
+            AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
+            Systemd(stream) => stream.poll_read(cx, buf),
             User(stream) => stream.poll_read(cx, buf),
         }
     }
@@ -249,6 +275,16 @@ impl Operation {
                     OperationApplyOutput::Apt(output),
                     OperationApplyStdout::Apt(stdout),
                     OperationApplyStderr::Apt(stderr),
+                ))
+            }
+            Operation::AptRepo(op) => {
+                let (output, stdout, stderr) = AptRepo::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::AptRepo)?;
+                Ok((
+                    OperationApplyOutput::AptRepo(output),
+                    OperationApplyStdout::AptRepo(stdout),
+                    OperationApplyStderr::AptRepo(stderr),
                 ))
             }
             Operation::Pacman(op) => {
@@ -291,6 +327,16 @@ impl Operation {
                     OperationApplyStderr::Git(stderr),
                 ))
             }
+            Operation::Systemd(op) => {
+                let (output, stdout, stderr) = Systemd::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::Systemd)?;
+                Ok((
+                    OperationApplyOutput::Systemd(output),
+                    OperationApplyStdout::Systemd(stdout),
+                    OperationApplyStderr::Systemd(stderr),
+                ))
+            }
             Operation::User(op) => {
                 let (output, stdout, stderr) = User::apply(ctx, op)
                     .await
@@ -310,10 +356,12 @@ impl Display for Operation {
         use Operation::*;
         match self {
             Apt(op) => Display::fmt(op, f),
+            AptRepo(op) => Display::fmt(op, f),
             Pacman(op) => Display::fmt(op, f),
             File(op) => Display::fmt(op, f),
             Command(op) => Display::fmt(op, f),
             Git(op) => Display::fmt(op, f),
+            Systemd(op) => Display::fmt(op, f),
             User(op) => Display::fmt(op, f),
         }
     }
@@ -324,10 +372,12 @@ impl Render for Operation {
         use Operation::*;
         match self {
             Apt(params) => params.render(),
+            AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            Systemd(params) => params.render(),
             User(params) => params.render(),
         }
     }
@@ -337,37 +387,45 @@ impl Render for Operation {
 #[derive(Debug, Clone)]
 pub struct OperationsByType {
     apt: Vec<AptOperation>,
+    apt_repo: Vec<AptRepoOperation>,
     pacman: Vec<PacmanOperation>,
     file: Vec<FileOperation>,
     command: Vec<CommandOperation>,
     git: Vec<GitOperation>,
+    systemd: Vec<SystemdOperation>,
     user: Vec<UserOperation>,
 }
 
 /// Bucket a mixed iterator of operations into per-family vectors.
 fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> OperationsByType {
     let mut apt: Vec<AptOperation> = Vec::new();
+    let mut apt_repo: Vec<AptRepoOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
     let mut command: Vec<CommandOperation> = Vec::new();
     let mut git: Vec<GitOperation> = Vec::new();
+    let mut systemd: Vec<SystemdOperation> = Vec::new();
     let mut user: Vec<UserOperation> = Vec::new();
     for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
+            Operation::AptRepo(op) => apt_repo.push(op),
             Operation::Pacman(op) => pacman.push(op),
             Operation::File(op) => file.push(op),
             Operation::Command(op) => command.push(op),
             Operation::Git(op) => git.push(op),
+            Operation::Systemd(op) => systemd.push(op),
             Operation::User(op) => user.push(op),
         }
     }
     OperationsByType {
         apt,
+        apt_repo,
         pacman,
         file,
         command,
         git,
+        systemd,
         user,
     }
 }
