@@ -5,6 +5,7 @@
 use lusid_params::{ParamValues, validate};
 use lusid_resource::{
     ResourceParams, ResourceType, apt::Apt, command::Command, file::File, git::Git, pacman::Pacman,
+    systemd_service::SystemdService,
 };
 use rimu::{Spanned, Value};
 
@@ -28,6 +29,9 @@ pub fn core_module(
         Pacman::ID => core_module_for_resource::<Pacman>(params).map(ResourceParams::Pacman),
         Command::ID => core_module_for_resource::<Command>(params).map(ResourceParams::Command),
         Git::ID => core_module_for_resource::<Git>(params).map(ResourceParams::Git),
+        SystemdService::ID => {
+            core_module_for_resource::<SystemdService>(params).map(ResourceParams::SystemdService)
+        }
         other => Err(PlanItemToResourceError::UnsupportedCoreModuleId {
             id: other.to_string(),
         }),

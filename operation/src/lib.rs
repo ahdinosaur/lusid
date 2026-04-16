@@ -39,6 +39,7 @@ use crate::operations::{
     file::{File, FileOperation},
     git::{Git, GitOperation},
     pacman::{Pacman, PacmanOperation},
+    systemd_service::{SystemdService, SystemdServiceOperation},
 };
 
 /// One family of operations (apt, pacman, file, …). Implementors are zero-sized
@@ -84,6 +85,7 @@ pub enum Operation {
     File(FileOperation),
     Command(CommandOperation),
     Git(GitOperation),
+    SystemdService(SystemdServiceOperation),
 }
 
 impl Operation {
@@ -99,6 +101,7 @@ impl Operation {
             file,
             command,
             git,
+            systemd_service,
         } = partition_by_type(operations);
 
         std::iter::empty()
@@ -107,6 +110,11 @@ impl Operation {
             .chain(File::merge(file).into_iter().map(Operation::File))
             .chain(Command::merge(command).into_iter().map(Operation::Command))
             .chain(Git::merge(git).into_iter().map(Operation::Git))
+            .chain(
+                SystemdService::merge(systemd_service)
+                    .into_iter()
+                    .map(Operation::SystemdService),
+            )
             .collect()
     }
 }
@@ -128,6 +136,9 @@ pub enum OperationApplyError {
 
     #[error("git operation failed: {0:?}")]
     Git(<Git as OperationType>::ApplyError),
+
+    #[error("systemd-service operation failed: {0:?}")]
+    SystemdService(<SystemdService as OperationType>::ApplyError),
 }
 
 /// Unified completion future for any operation. `Future::poll` forwards to the active
@@ -139,6 +150,7 @@ pub enum OperationApplyOutput {
     File(#[pin] <File as OperationType>::ApplyOutput),
     Command(#[pin] <Command as OperationType>::ApplyOutput),
     Git(#[pin] <Git as OperationType>::ApplyOutput),
+    SystemdService(#[pin] <SystemdService as OperationType>::ApplyOutput),
 }
 
 impl Future for OperationApplyOutput {
@@ -152,6 +164,7 @@ impl Future for OperationApplyOutput {
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
             Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
             Git(fut) => fut.poll(cx).map_err(OperationApplyError::Git),
+            SystemdService(fut) => fut.poll(cx).map_err(OperationApplyError::SystemdService),
         }
     }
 }
@@ -165,6 +178,7 @@ pub enum OperationApplyStdout {
     File(#[pin] <File as OperationType>::ApplyStdout),
     Command(#[pin] <Command as OperationType>::ApplyStdout),
     Git(#[pin] <Git as OperationType>::ApplyStdout),
+    SystemdService(#[pin] <SystemdService as OperationType>::ApplyStdout),
 }
 
 impl AsyncRead for OperationApplyStdout {
@@ -180,6 +194,7 @@ impl AsyncRead for OperationApplyStdout {
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
+            SystemdService(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -193,6 +208,7 @@ pub enum OperationApplyStderr {
     File(#[pin] <File as OperationType>::ApplyStderr),
     Command(#[pin] <Command as OperationType>::ApplyStderr),
     Git(#[pin] <Git as OperationType>::ApplyStderr),
+    SystemdService(#[pin] <SystemdService as OperationType>::ApplyStderr),
 }
 
 impl AsyncRead for OperationApplyStderr {
@@ -208,6 +224,7 @@ impl AsyncRead for OperationApplyStderr {
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
+            SystemdService(stream) => stream.poll_read(cx, buf),
         }
     }
 }
@@ -278,6 +295,16 @@ impl Operation {
                     OperationApplyStderr::Git(stderr),
                 ))
             }
+            Operation::SystemdService(op) => {
+                let (output, stdout, stderr) = SystemdService::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::SystemdService)?;
+                Ok((
+                    OperationApplyOutput::SystemdService(output),
+                    OperationApplyStdout::SystemdService(stdout),
+                    OperationApplyStderr::SystemdService(stderr),
+                ))
+            }
         }
     }
 }
@@ -291,6 +318,7 @@ impl Display for Operation {
             File(op) => Display::fmt(op, f),
             Command(op) => Display::fmt(op, f),
             Git(op) => Display::fmt(op, f),
+            SystemdService(op) => Display::fmt(op, f),
         }
     }
 }
@@ -304,6 +332,7 @@ impl Render for Operation {
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            SystemdService(params) => params.render(),
         }
     }
 }
@@ -316,6 +345,7 @@ pub struct OperationsByType {
     file: Vec<FileOperation>,
     command: Vec<CommandOperation>,
     git: Vec<GitOperation>,
+    systemd_service: Vec<SystemdServiceOperation>,
 }
 
 /// Bucket a mixed iterator of operations into per-family vectors.
@@ -325,6 +355,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     let mut file: Vec<FileOperation> = Vec::new();
     let mut command: Vec<CommandOperation> = Vec::new();
     let mut git: Vec<GitOperation> = Vec::new();
+    let mut systemd_service: Vec<SystemdServiceOperation> = Vec::new();
     for operation in operations.into_iter() {
         match operation {
             Operation::Apt(op) => apt.push(op),
@@ -332,6 +363,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
             Operation::File(op) => file.push(op),
             Operation::Command(op) => command.push(op),
             Operation::Git(op) => git.push(op),
+            Operation::SystemdService(op) => systemd_service.push(op),
         }
     }
     OperationsByType {
@@ -340,5 +372,6 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
         file,
         command,
         git,
+        systemd_service,
     }
 }
