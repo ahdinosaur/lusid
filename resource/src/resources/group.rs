@@ -323,9 +323,21 @@ impl ResourceType for Group {
             }
             GroupChange::Modify { name, gid, members } => {
                 let mut ops: Vec<CausalityTree<Operation>> = Vec::new();
-                if gid.is_some() {
+                let has_gid = gid.is_some();
+                let has_members = members.is_some();
+
+                if has_gid {
+                    // Order groupmod before gpasswd when both are emitted: both edit
+                    // /etc/group, and while shadow-utils serializes them via the
+                    // password-file lock, making the dependency explicit keeps the
+                    // plan correct regardless of intra-epoch scheduling.
+                    let meta = if has_members {
+                        CausalityMeta::id("modify".into())
+                    } else {
+                        CausalityMeta::default()
+                    };
                     ops.push(CausalityTree::leaf(
-                        CausalityMeta::default(),
+                        meta,
                         Operation::Group(GroupOperation::Modify {
                             name: name.clone(),
                             gid,
@@ -333,8 +345,13 @@ impl ResourceType for Group {
                     ));
                 }
                 if let Some(members) = members {
+                    let meta = if has_gid {
+                        CausalityMeta::requires(vec!["modify".into()])
+                    } else {
+                        CausalityMeta::default()
+                    };
                     ops.push(CausalityTree::leaf(
-                        CausalityMeta::default(),
+                        meta,
                         Operation::Group(GroupOperation::SetMembers { name, members }),
                     ));
                 }
