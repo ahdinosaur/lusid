@@ -4,5 +4,6 @@ pub mod command;
 pub mod file;
 pub mod git;
 pub mod pacman;
+pub mod podman;
 pub mod systemd;
 pub mod user;

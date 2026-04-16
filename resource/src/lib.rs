@@ -48,6 +48,7 @@ use crate::resources::command::{
 use crate::resources::file::{File, FileChange, FileResource, FileState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
+use crate::resources::podman::{Podman, PodmanChange, PodmanParams, PodmanResource, PodmanState};
 use crate::resources::systemd::{
     Systemd, SystemdChange, SystemdParams, SystemdResource, SystemdState,
 };
@@ -108,6 +109,7 @@ pub enum ResourceParams {
     AptRepo(AptRepoParams),
     File(FileParams),
     Pacman(PacmanParams),
+    Podman(PodmanParams),
     Command(CommandParams),
     Git(GitParams),
     Systemd(SystemdParams),
@@ -122,6 +124,7 @@ impl Display for ResourceParams {
             AptRepo(params) => params.fmt(f),
             File(params) => params.fmt(f),
             Pacman(params) => params.fmt(f),
+            Podman(params) => params.fmt(f),
             Command(params) => params.fmt(f),
             Git(params) => params.fmt(f),
             Systemd(params) => params.fmt(f),
@@ -138,6 +141,7 @@ impl Render for ResourceParams {
             AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
@@ -153,6 +157,7 @@ pub enum Resource {
     AptRepo(AptRepoResource),
     File(FileResource),
     Pacman(PacmanResource),
+    Podman(PodmanResource),
     Command(CommandResource),
     Git(GitResource),
     Systemd(SystemdResource),
@@ -167,6 +172,7 @@ impl Display for Resource {
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+            Podman(podman) => podman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
@@ -183,6 +189,7 @@ impl Render for Resource {
             AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
@@ -201,6 +208,7 @@ pub enum ResourceState {
     AptRepo(AptRepoState),
     File(FileState),
     Pacman(PacmanState),
+    Podman(PodmanState),
     Command(CommandState),
     Git(GitState),
     Systemd(SystemdState),
@@ -215,6 +223,7 @@ impl Display for ResourceState {
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+            Podman(podman) => podman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
@@ -231,6 +240,7 @@ impl Render for ResourceState {
             AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
@@ -253,6 +263,10 @@ pub enum ResourceStateError {
     File(#[from] <File as ResourceType>::StateError),
     #[error("pacman state error: {0}")]
     Pacman(#[from] <Pacman as ResourceType>::StateError),
+
+    #[error("podman state error: {0}")]
+    Podman(#[from] <Podman as ResourceType>::StateError),
+
     #[error("command state error: {0}")]
     Command(#[from] <Command as ResourceType>::StateError),
 
@@ -273,6 +287,7 @@ pub enum ResourceChange {
     AptRepo(AptRepoChange),
     File(FileChange),
     Pacman(PacmanChange),
+    Podman(PodmanChange),
     Command(CommandChange),
     Git(GitChange),
     Systemd(SystemdChange),
@@ -287,6 +302,7 @@ impl Display for ResourceChange {
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
+            Podman(podman) => podman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
@@ -303,6 +319,7 @@ impl Render for ResourceChange {
             AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
@@ -330,6 +347,7 @@ impl ResourceParams {
             ResourceParams::AptRepo(params) => typed::<AptRepo>(params, Resource::AptRepo),
             ResourceParams::File(params) => typed::<File>(params, Resource::File),
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
+            ResourceParams::Podman(params) => typed::<Podman>(params, Resource::Podman),
             ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
             ResourceParams::Git(params) => typed::<Git>(params, Resource::Git),
             ResourceParams::Systemd(params) => typed::<Systemd>(params, Resource::Systemd),
@@ -376,6 +394,15 @@ impl Resource {
                 )
                 .await
             }
+            Resource::Podman(resource) => {
+                typed::<Podman>(
+                    ctx,
+                    resource,
+                    ResourceState::Podman,
+                    ResourceStateError::Podman,
+                )
+                .await
+            }
             Resource::Command(resource) => {
                 typed::<Command>(
                     ctx,
@@ -398,13 +425,7 @@ impl Resource {
                 .await
             }
             Resource::User(resource) => {
-                typed::<User>(
-                    ctx,
-                    resource,
-                    ResourceState::User,
-                    ResourceStateError::User,
-                )
-                .await
+                typed::<User>(ctx, resource, ResourceState::User, ResourceStateError::User).await
             }
         }
     }
@@ -441,6 +462,9 @@ impl Resource {
             (Resource::Pacman(resource), ResourceState::Pacman(state)) => {
                 typed::<Pacman>(resource, state, ResourceChange::Pacman)
             }
+            (Resource::Podman(resource), ResourceState::Podman(state)) => {
+                typed::<Podman>(resource, state, ResourceChange::Podman)
+            }
             (Resource::Command(resource), ResourceState::Command(state)) => {
                 typed::<Command>(resource, state, ResourceChange::Command)
             }
@@ -470,6 +494,7 @@ impl ResourceChange {
             ResourceChange::AptRepo(change) => AptRepo::operations(change),
             ResourceChange::File(change) => File::operations(change),
             ResourceChange::Pacman(change) => Pacman::operations(change),
+            ResourceChange::Podman(change) => Podman::operations(change),
             ResourceChange::Command(change) => Command::operations(change),
             ResourceChange::Git(change) => Git::operations(change),
             ResourceChange::Systemd(change) => Systemd::operations(change),

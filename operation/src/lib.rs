@@ -40,6 +40,7 @@ use crate::operations::{
     file::{File, FileOperation},
     git::{Git, GitOperation},
     pacman::{Pacman, PacmanOperation},
+    podman::{Podman, PodmanOperation},
     systemd::{Systemd, SystemdOperation},
     user::{User, UserOperation},
 };
@@ -85,6 +86,7 @@ pub enum Operation {
     Apt(AptOperation),
     AptRepo(AptRepoOperation),
     Pacman(PacmanOperation),
+    Podman(PodmanOperation),
     File(FileOperation),
     Command(CommandOperation),
     Git(GitOperation),
@@ -103,6 +105,7 @@ impl Operation {
             apt,
             apt_repo,
             pacman,
+            podman,
             file,
             command,
             git,
@@ -114,6 +117,7 @@ impl Operation {
             .chain(Apt::merge(apt).into_iter().map(Operation::Apt))
             .chain(AptRepo::merge(apt_repo).into_iter().map(Operation::AptRepo))
             .chain(Pacman::merge(pacman).into_iter().map(Operation::Pacman))
+            .chain(Podman::merge(podman).into_iter().map(Operation::Podman))
             .chain(File::merge(file).into_iter().map(Operation::File))
             .chain(Command::merge(command).into_iter().map(Operation::Command))
             .chain(Git::merge(git).into_iter().map(Operation::Git))
@@ -134,6 +138,9 @@ pub enum OperationApplyError {
 
     #[error("pacman operation failed: {0:?}")]
     Pacman(<Pacman as OperationType>::ApplyError),
+
+    #[error("podman operation failed: {0:?}")]
+    Podman(<Podman as OperationType>::ApplyError),
 
     #[error("file operation failed: {0:?}")]
     File(<File as OperationType>::ApplyError),
@@ -158,6 +165,7 @@ pub enum OperationApplyOutput {
     Apt(#[pin] <Apt as OperationType>::ApplyOutput),
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyOutput),
     Pacman(#[pin] <Pacman as OperationType>::ApplyOutput),
+    Podman(#[pin] <Podman as OperationType>::ApplyOutput),
     File(#[pin] <File as OperationType>::ApplyOutput),
     Command(#[pin] <Command as OperationType>::ApplyOutput),
     Git(#[pin] <Git as OperationType>::ApplyOutput),
@@ -174,6 +182,7 @@ impl Future for OperationApplyOutput {
             Apt(fut) => fut.poll(cx).map_err(OperationApplyError::Apt),
             AptRepo(fut) => fut.poll(cx).map_err(OperationApplyError::AptRepo),
             Pacman(fut) => fut.poll(cx).map_err(OperationApplyError::Pacman),
+            Podman(fut) => fut.poll(cx).map_err(OperationApplyError::Podman),
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
             Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
             Git(fut) => fut.poll(cx).map_err(OperationApplyError::Git),
@@ -190,6 +199,7 @@ pub enum OperationApplyStdout {
     Apt(#[pin] <Apt as OperationType>::ApplyStdout),
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyStdout),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStdout),
+    Podman(#[pin] <Podman as OperationType>::ApplyStdout),
     File(#[pin] <File as OperationType>::ApplyStdout),
     Command(#[pin] <Command as OperationType>::ApplyStdout),
     Git(#[pin] <Git as OperationType>::ApplyStdout),
@@ -208,6 +218,7 @@ impl AsyncRead for OperationApplyStdout {
             Apt(stream) => stream.poll_read(cx, buf),
             AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
+            Podman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
@@ -224,6 +235,7 @@ pub enum OperationApplyStderr {
     Apt(#[pin] <Apt as OperationType>::ApplyStderr),
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyStderr),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStderr),
+    Podman(#[pin] <Podman as OperationType>::ApplyStderr),
     File(#[pin] <File as OperationType>::ApplyStderr),
     Command(#[pin] <Command as OperationType>::ApplyStderr),
     Git(#[pin] <Git as OperationType>::ApplyStderr),
@@ -242,6 +254,7 @@ impl AsyncRead for OperationApplyStderr {
             Apt(stream) => stream.poll_read(cx, buf),
             AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
+            Podman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
@@ -295,6 +308,16 @@ impl Operation {
                     OperationApplyOutput::Pacman(output),
                     OperationApplyStdout::Pacman(stdout),
                     OperationApplyStderr::Pacman(stderr),
+                ))
+            }
+            Operation::Podman(op) => {
+                let (output, stdout, stderr) = Podman::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::Podman)?;
+                Ok((
+                    OperationApplyOutput::Podman(output),
+                    OperationApplyStdout::Podman(stdout),
+                    OperationApplyStderr::Podman(stderr),
                 ))
             }
             Operation::File(op) => {
@@ -358,6 +381,7 @@ impl Display for Operation {
             Apt(op) => Display::fmt(op, f),
             AptRepo(op) => Display::fmt(op, f),
             Pacman(op) => Display::fmt(op, f),
+            Podman(op) => Display::fmt(op, f),
             File(op) => Display::fmt(op, f),
             Command(op) => Display::fmt(op, f),
             Git(op) => Display::fmt(op, f),
@@ -375,6 +399,7 @@ impl Render for Operation {
             AptRepo(params) => params.render(),
             File(params) => params.render(),
             Pacman(params) => params.render(),
+            Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
@@ -389,6 +414,7 @@ pub struct OperationsByType {
     apt: Vec<AptOperation>,
     apt_repo: Vec<AptRepoOperation>,
     pacman: Vec<PacmanOperation>,
+    podman: Vec<PodmanOperation>,
     file: Vec<FileOperation>,
     command: Vec<CommandOperation>,
     git: Vec<GitOperation>,
@@ -401,6 +427,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     let mut apt: Vec<AptOperation> = Vec::new();
     let mut apt_repo: Vec<AptRepoOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();
+    let mut podman: Vec<PodmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
     let mut command: Vec<CommandOperation> = Vec::new();
     let mut git: Vec<GitOperation> = Vec::new();
@@ -411,6 +438,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
             Operation::Apt(op) => apt.push(op),
             Operation::AptRepo(op) => apt_repo.push(op),
             Operation::Pacman(op) => pacman.push(op),
+            Operation::Podman(op) => podman.push(op),
             Operation::File(op) => file.push(op),
             Operation::Command(op) => command.push(op),
             Operation::Git(op) => git.push(op),
@@ -422,6 +450,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
         apt,
         apt_repo,
         pacman,
+        podman,
         file,
         command,
         git,
