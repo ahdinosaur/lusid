@@ -45,8 +45,12 @@ use crate::resources::apt_repo::{
 use crate::resources::command::{
     Command, CommandChange, CommandParams, CommandResource, CommandState,
 };
+use crate::resources::directory::{
+    Directory, DirectoryChange, DirectoryParams, DirectoryResource, DirectoryState,
+};
 use crate::resources::file::{File, FileChange, FileResource, FileState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
+use crate::resources::group::{Group, GroupChange, GroupParams, GroupResource, GroupState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 use crate::resources::podman::{Podman, PodmanChange, PodmanParams, PodmanResource, PodmanState};
 use crate::resources::systemd::{
@@ -108,12 +112,14 @@ pub enum ResourceParams {
     Apt(AptParams),
     AptRepo(AptRepoParams),
     File(FileParams),
+    Directory(DirectoryParams),
     Pacman(PacmanParams),
     Podman(PodmanParams),
     Command(CommandParams),
     Git(GitParams),
     Systemd(SystemdParams),
     User(UserParams),
+    Group(GroupParams),
 }
 
 impl Display for ResourceParams {
@@ -123,12 +129,14 @@ impl Display for ResourceParams {
             Apt(params) => params.fmt(f),
             AptRepo(params) => params.fmt(f),
             File(params) => params.fmt(f),
+            Directory(params) => params.fmt(f),
             Pacman(params) => params.fmt(f),
             Podman(params) => params.fmt(f),
             Command(params) => params.fmt(f),
             Git(params) => params.fmt(f),
             Systemd(params) => params.fmt(f),
             User(params) => params.fmt(f),
+            Group(params) => params.fmt(f),
         }
     }
 }
@@ -140,12 +148,14 @@ impl Render for ResourceParams {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
+            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -156,12 +166,14 @@ pub enum Resource {
     Apt(AptResource),
     AptRepo(AptRepoResource),
     File(FileResource),
+    Directory(DirectoryResource),
     Pacman(PacmanResource),
     Podman(PodmanResource),
     Command(CommandResource),
     Git(GitResource),
     Systemd(SystemdResource),
     User(UserResource),
+    Group(GroupResource),
 }
 
 impl Display for Resource {
@@ -171,12 +183,14 @@ impl Display for Resource {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
+            Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Podman(podman) => podman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
             User(user) => user.fmt(f),
+            Group(group) => group.fmt(f),
         }
     }
 }
@@ -188,12 +202,14 @@ impl Render for Resource {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
+            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -207,12 +223,14 @@ pub enum ResourceState {
     Apt(AptState),
     AptRepo(AptRepoState),
     File(FileState),
+    Directory(DirectoryState),
     Pacman(PacmanState),
     Podman(PodmanState),
     Command(CommandState),
     Git(GitState),
     Systemd(SystemdState),
     User(UserState),
+    Group(GroupState),
 }
 
 impl Display for ResourceState {
@@ -222,12 +240,14 @@ impl Display for ResourceState {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
+            Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Podman(podman) => podman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
             User(user) => user.fmt(f),
+            Group(group) => group.fmt(f),
         }
     }
 }
@@ -239,12 +259,14 @@ impl Render for ResourceState {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
+            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -261,6 +283,10 @@ pub enum ResourceStateError {
 
     #[error("file state error: {0}")]
     File(#[from] <File as ResourceType>::StateError),
+
+    #[error("directory state error: {0}")]
+    Directory(#[from] <Directory as ResourceType>::StateError),
+
     #[error("pacman state error: {0}")]
     Pacman(#[from] <Pacman as ResourceType>::StateError),
 
@@ -278,6 +304,9 @@ pub enum ResourceStateError {
 
     #[error("user state error: {0}")]
     User(#[from] <User as ResourceType>::StateError),
+
+    #[error("group state error: {0}")]
+    Group(#[from] <Group as ResourceType>::StateError),
 }
 
 /// Dispatcher over every resource's `Change`.
@@ -286,12 +315,14 @@ pub enum ResourceChange {
     Apt(AptChange),
     AptRepo(AptRepoChange),
     File(FileChange),
+    Directory(DirectoryChange),
     Pacman(PacmanChange),
     Podman(PodmanChange),
     Command(CommandChange),
     Git(GitChange),
     Systemd(SystemdChange),
     User(UserChange),
+    Group(GroupChange),
 }
 
 impl Display for ResourceChange {
@@ -301,12 +332,14 @@ impl Display for ResourceChange {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
+            Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Podman(podman) => podman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
             User(user) => user.fmt(f),
+            Group(group) => group.fmt(f),
         }
     }
 }
@@ -318,12 +351,14 @@ impl Render for ResourceChange {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
+            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -346,12 +381,14 @@ impl ResourceParams {
             ResourceParams::Apt(params) => typed::<Apt>(params, Resource::Apt),
             ResourceParams::AptRepo(params) => typed::<AptRepo>(params, Resource::AptRepo),
             ResourceParams::File(params) => typed::<File>(params, Resource::File),
+            ResourceParams::Directory(params) => typed::<Directory>(params, Resource::Directory),
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
             ResourceParams::Podman(params) => typed::<Podman>(params, Resource::Podman),
             ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
             ResourceParams::Git(params) => typed::<Git>(params, Resource::Git),
             ResourceParams::Systemd(params) => typed::<Systemd>(params, Resource::Systemd),
             ResourceParams::User(params) => typed::<User>(params, Resource::User),
+            ResourceParams::Group(params) => typed::<Group>(params, Resource::Group),
         }
     }
 }
@@ -384,6 +421,15 @@ impl Resource {
             }
             Resource::File(resource) => {
                 typed::<File>(ctx, resource, ResourceState::File, ResourceStateError::File).await
+            }
+            Resource::Directory(resource) => {
+                typed::<Directory>(
+                    ctx,
+                    resource,
+                    ResourceState::Directory,
+                    ResourceStateError::Directory,
+                )
+                .await
             }
             Resource::Pacman(resource) => {
                 typed::<Pacman>(
@@ -427,6 +473,15 @@ impl Resource {
             Resource::User(resource) => {
                 typed::<User>(ctx, resource, ResourceState::User, ResourceStateError::User).await
             }
+            Resource::Group(resource) => {
+                typed::<Group>(
+                    ctx,
+                    resource,
+                    ResourceState::Group,
+                    ResourceStateError::Group,
+                )
+                .await
+            }
         }
     }
 
@@ -459,6 +514,9 @@ impl Resource {
             (Resource::File(resource), ResourceState::File(state)) => {
                 typed::<File>(resource, state, ResourceChange::File)
             }
+            (Resource::Directory(resource), ResourceState::Directory(state)) => {
+                typed::<Directory>(resource, state, ResourceChange::Directory)
+            }
             (Resource::Pacman(resource), ResourceState::Pacman(state)) => {
                 typed::<Pacman>(resource, state, ResourceChange::Pacman)
             }
@@ -477,6 +535,9 @@ impl Resource {
             (Resource::User(resource), ResourceState::User(state)) => {
                 typed::<User>(resource, state, ResourceChange::User)
             }
+            (Resource::Group(resource), ResourceState::Group(state)) => {
+                typed::<Group>(resource, state, ResourceChange::Group)
+            }
             _ => {
                 // Programmer error, should never happen, or if it does should be immediately obvious.
                 panic!("Unmatched resource and state")
@@ -493,12 +554,14 @@ impl ResourceChange {
             ResourceChange::Apt(change) => Apt::operations(change),
             ResourceChange::AptRepo(change) => AptRepo::operations(change),
             ResourceChange::File(change) => File::operations(change),
+            ResourceChange::Directory(change) => Directory::operations(change),
             ResourceChange::Pacman(change) => Pacman::operations(change),
             ResourceChange::Podman(change) => Podman::operations(change),
             ResourceChange::Command(change) => Command::operations(change),
             ResourceChange::Git(change) => Git::operations(change),
             ResourceChange::Systemd(change) => Systemd::operations(change),
             ResourceChange::User(change) => User::operations(change),
+            ResourceChange::Group(change) => Group::operations(change),
         }
     }
 }

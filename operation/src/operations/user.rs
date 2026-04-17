@@ -17,7 +17,10 @@ pub enum UserOperation {
         name: String,
         uid: Option<u32>,
         primary_group: Option<String>,
-        supplementary_groups: Vec<String>,
+        /// Supplementary groups to set at creation via `useradd -G`. Since the
+        /// account doesn't exist yet there's nothing to preserve, so this is
+        /// just the initial set.
+        append_groups: Vec<String>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -28,7 +31,9 @@ pub enum UserOperation {
         name: String,
         uid: Option<u32>,
         primary_group: Option<String>,
-        supplementary_groups: Option<Vec<String>>,
+        /// Supplementary groups to append via `usermod -aG`, leaving any groups
+        /// not listed here untouched. `None` skips the group flag entirely.
+        append_groups: Option<Vec<String>>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -45,7 +50,10 @@ impl Display for UserOperation {
             UserOperation::Add { name, .. } => write!(f, "User::Add(name = {name})"),
             UserOperation::Modify { name, .. } => write!(f, "User::Modify(name = {name})"),
             UserOperation::Delete { name, remove_home } => {
-                write!(f, "User::Delete(name = {name}, remove_home = {remove_home})")
+                write!(
+                    f,
+                    "User::Delete(name = {name}, remove_home = {remove_home})"
+                )
             }
         }
     }
@@ -87,7 +95,7 @@ impl OperationType for User {
                 name,
                 uid,
                 primary_group,
-                supplementary_groups,
+                append_groups,
                 comment,
                 home,
                 shell,
@@ -102,8 +110,8 @@ impl OperationType for User {
                 if let Some(group) = primary_group {
                     cmd.arg("-g").arg(group);
                 }
-                if !supplementary_groups.is_empty() {
-                    cmd.arg("-G").arg(supplementary_groups.join(","));
+                if !append_groups.is_empty() {
+                    cmd.arg("-G").arg(append_groups.join(","));
                 }
                 if let Some(comment) = comment {
                     cmd.arg("-c").arg(comment);
@@ -137,7 +145,7 @@ impl OperationType for User {
                 name,
                 uid,
                 primary_group,
-                supplementary_groups,
+                append_groups,
                 comment,
                 home,
                 shell,
@@ -150,8 +158,10 @@ impl OperationType for User {
                 if let Some(group) = primary_group {
                     cmd.arg("-g").arg(group);
                 }
-                if let Some(groups) = supplementary_groups {
-                    cmd.arg("-G").arg(groups.join(","));
+                if let Some(groups) = append_groups {
+                    // `-aG` appends rather than replacing: groups the user is already
+                    // a member of are untouched, including ones not listed here.
+                    cmd.arg("-aG").arg(groups.join(","));
                 }
                 if let Some(comment) = comment {
                     cmd.arg("-c").arg(comment);

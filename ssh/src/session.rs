@@ -12,9 +12,10 @@ use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
 use async_promise::Promise;
+use bytes::Bytes;
 use russh::client::{Config, Handle, Handler, Msg, connect};
 use russh::keys::{PrivateKey, PrivateKeyWithHashAlg, ssh_key};
-use russh::{ChannelMsg, ChannelWriteHalf, CryptoVec, Error as SshError};
+use russh::{ChannelMsg, ChannelWriteHalf, Error as SshError};
 use tokio::io::AsyncWrite;
 use tokio::net::ToSocketAddrs;
 use tokio::sync::mpsc;
@@ -111,7 +112,7 @@ impl<H: Handler> DerefMut for AsyncSession<H> {
 /// Implements Deref to the underlying ChannelWriteHalf.
 pub struct AsyncChannel {
     write_half: ChannelWriteHalf<Msg>,
-    subscribe_send: mpsc::UnboundedSender<(Option<u32>, mpsc::UnboundedSender<CryptoVec>)>,
+    subscribe_send: mpsc::UnboundedSender<(Option<u32>, mpsc::UnboundedSender<Bytes>)>,
     success_failure: Promise<bool>,
     eof: Promise<()>,
     exit_status: Promise<u32>,
@@ -127,12 +128,12 @@ impl From<russh::Channel<Msg>> for AsyncChannel {
         let (subscribe_send, mut subscribe_recv) = mpsc::unbounded_channel();
 
         let reader = async move {
-            // Map from `ext` to a sender for CryptoVecs of data.
-            type Subscribers = HashMap<Option<u32>, mpsc::UnboundedSender<CryptoVec>>;
+            // Map from `ext` to a sender for Bytess of data.
+            type Subscribers = HashMap<Option<u32>, mpsc::UnboundedSender<Bytes>>;
             let mut subscribers = Some(Subscribers::new());
 
             #[tracing::instrument(level = "INFO", skip_all, fields(?ext))]
-            fn receive_data(subscribers: &Option<Subscribers>, ext: Option<u32>, data: CryptoVec) {
+            fn receive_data(subscribers: &Option<Subscribers>, ext: Option<u32>, data: Bytes) {
                 if let Some(subscribers) = subscribers {
                     if let Some(send) = subscribers.get(&ext) {
                         if let Err(e) = send.send(data) {
@@ -246,12 +247,12 @@ impl AsyncChannel {
     }
 
     /// Returns the specified stream as an AsyncWrite.
-    pub fn write_stream(&self, ext: Option<u32>) -> impl AsyncWrite + use<> {
+    pub fn write_stream(&self, ext: Option<u32>) -> impl AsyncWrite + 'static {
         self.write_half.make_writer_ext(ext)
     }
 
     /// Returns stdin as an AsyncWrite.
-    pub fn stdin(&self) -> impl AsyncWrite + use<> {
+    pub fn stdin(&self) -> impl AsyncWrite + 'static {
         self.write_stream(None)
     }
 

@@ -9,7 +9,6 @@ pub trait Render {
 
 /// `None` renders as an empty [`Fragment`] so optional fields can be rendered
 /// unconditionally without special-casing.
-
 impl<T> Render for Option<T>
 where
     T: Render,
