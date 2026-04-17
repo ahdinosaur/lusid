@@ -4,8 +4,9 @@
 
 use lusid_params::{ParamValues, validate};
 use lusid_resource::{
-    ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command, file::File,
-    directory::Directory, git::Git, group::Group, pacman::Pacman, systemd::Systemd, user::User,
+    ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command,
+    directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, systemd::Systemd,
+    user::User,
 };
 use rimu::{Spanned, Value};
 
