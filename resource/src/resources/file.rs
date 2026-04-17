@@ -36,15 +36,6 @@ pub enum FileParams {
     FileAbsent {
         path: FilePath,
     },
-    Directory {
-        path: FilePath,
-        mode: Option<FileMode>,
-        user: Option<FileUser>,
-        group: Option<FileGroup>,
-    },
-    DirectoryAbsent {
-        path: FilePath,
-    },
 }
 
 impl Display for FileParams {
@@ -55,8 +46,6 @@ impl Display for FileParams {
             }
             FileParams::File { path, .. } => write!(f, "File(path={path})"),
             FileParams::FileAbsent { path } => write!(f, "FileAbsent(path={path})"),
-            FileParams::Directory { path, .. } => write!(f, "Directory(path={path})"),
-            FileParams::DirectoryAbsent { path } => write!(f, "DirectoryAbsent(path={path})"),
         }
     }
 }
@@ -68,8 +57,6 @@ pub enum FileResource {
     FileSource { source: FilePath, path: FilePath },
     FilePresent { path: FilePath },
     FileAbsent { path: FilePath },
-    DirectoryPresent { path: FilePath },
-    DirectoryAbsent { path: FilePath },
     Mode { path: FilePath, mode: FileMode },
     User { path: FilePath, user: FileUser },
     Group { path: FilePath, group: FileGroup },
@@ -83,8 +70,6 @@ impl Display for FileResource {
             }
             FileResource::FilePresent { path } => write!(f, "FilePresent({path})"),
             FileResource::FileAbsent { path } => write!(f, "FileAbsent({path})"),
-            FileResource::DirectoryPresent { path } => write!(f, "DirectoryPresent({path})"),
-            FileResource::DirectoryAbsent { path } => write!(f, "DirectoryAbsent({path})"),
             FileResource::Mode { path, mode } => write!(f, "FileMode({path}, mode = {mode})"),
             FileResource::User { path, user } => write!(f, "FileUser({path}, user = {user})"),
             FileResource::Group { path, group } => write!(f, "FileGroup({path}, group = {group})"),
@@ -100,8 +85,6 @@ pub enum FileState {
     FileNotSourced,
     FilePresent,
     FileAbsent,
-    DirectoryPresent,
-    DirectoryAbsent,
     ModeCorrect,
     ModeIncorrect,
     UserCorrect,
@@ -118,8 +101,6 @@ impl Display for FileState {
             FileNotSourced => "FileNotSourced",
             FilePresent => "FilePresent",
             FileAbsent => "FileAbsent",
-            DirectoryPresent => "DirectoryPresent",
-            DirectoryAbsent => "DirectoryAbsent",
             ModeCorrect => "ModeCorrect",
             ModeIncorrect => "ModeIncorrect",
             UserCorrect => "UserCorrect",
@@ -146,12 +127,6 @@ pub enum FileChange {
         source: FileSource,
     },
     RemoveFile {
-        path: FilePath,
-    },
-    CreateDirectory {
-        path: FilePath,
-    },
-    RemoveDirectory {
         path: FilePath,
     },
     ChangeMode {
@@ -182,12 +157,6 @@ impl Display for FileChange {
                 ),
             },
             FileChange::RemoveFile { path } => write!(f, "File::RemoveFile(path = {path})"),
-            FileChange::CreateDirectory { path } => {
-                write!(f, "File::CreateDirectory(path = {path})")
-            }
-            FileChange::RemoveDirectory { path } => {
-                write!(f, "File::RemoveDirectory(path = {path})")
-            }
             FileChange::ChangeMode { path, mode } => {
                 write!(f, "File::ChangeMode(path = {path}, mode = {mode})")
             }
@@ -237,17 +206,6 @@ impl ResourceType for File {
                 },
                 indexmap! {
                   "type".to_string() => field(ParamType::Literal("file-absent".into()), true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                },
-                indexmap! {
-                  "type".to_string() => field(ParamType::Literal("directory".into()), true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                  "mode".to_string() => field(ParamType::Number, false),
-                  "user".to_string() => field(ParamType::String, false),
-                  "group".to_string() => field(ParamType::String, false),
-                },
-                indexmap! {
-                  "type".to_string() => field(ParamType::Literal("directory-absent".into()), true),
                   "path".to_string() => field(ParamType::TargetPath, true),
                 },
             ]),
@@ -350,52 +308,6 @@ impl ResourceType for File {
                 CausalityMeta::default(),
                 FileResource::FileAbsent { path },
             )],
-
-            FileParams::Directory {
-                path,
-                mode,
-                user,
-                group,
-            } => {
-                let mut nodes = vec![CausalityTree::leaf(
-                    CausalityMeta::id("directory".into()),
-                    FileResource::DirectoryPresent { path: path.clone() },
-                )];
-
-                if let Some(mode) = mode {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["directory".into()]),
-                        FileResource::Mode {
-                            path: path.clone(),
-                            mode,
-                        },
-                    ));
-                }
-
-                if let Some(user) = user {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["directory".into()]),
-                        FileResource::User {
-                            path: path.clone(),
-                            user,
-                        },
-                    ));
-                }
-
-                if let Some(group) = group {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["directory".into()]),
-                        FileResource::Group { path, group },
-                    ));
-                }
-
-                nodes
-            }
-
-            FileParams::DirectoryAbsent { path } => vec![CausalityTree::leaf(
-                CausalityMeta::default(),
-                FileResource::DirectoryAbsent { path },
-            )],
         }
     }
 
@@ -426,14 +338,6 @@ impl ResourceType for File {
                     FileState::FilePresent
                 } else {
                     FileState::FileAbsent
-                }
-            }
-
-            FileResource::DirectoryPresent { path } | FileResource::DirectoryAbsent { path } => {
-                if fs::path_exists(path.as_path()).await? {
-                    FileState::DirectoryPresent
-                } else {
-                    FileState::DirectoryAbsent
                 }
             }
 
@@ -511,18 +415,6 @@ impl ResourceType for File {
 
             (FileResource::FileAbsent { .. }, FileState::FileAbsent) => None,
 
-            (FileResource::DirectoryPresent { path }, FileState::DirectoryAbsent) => {
-                Some(FileChange::CreateDirectory { path: path.clone() })
-            }
-
-            (FileResource::DirectoryPresent { .. }, FileState::DirectoryPresent) => None,
-
-            (FileResource::DirectoryAbsent { path }, FileState::DirectoryPresent) => {
-                Some(FileChange::RemoveDirectory { path: path.clone() })
-            }
-
-            (FileResource::DirectoryAbsent { .. }, FileState::DirectoryAbsent) => None,
-
             (FileResource::Mode { path, mode }, FileState::ModeIncorrect) => {
                 Some(FileChange::ChangeMode {
                     path: path.clone(),
@@ -567,12 +459,6 @@ impl ResourceType for File {
                 Operation::File(FileOperation::WriteFile { path, source })
             }
             FileChange::RemoveFile { path } => Operation::File(FileOperation::RemoveFile { path }),
-            FileChange::CreateDirectory { path } => {
-                Operation::File(FileOperation::CreateDirectory { path })
-            }
-            FileChange::RemoveDirectory { path } => {
-                Operation::File(FileOperation::RemoveDirectory { path })
-            }
             FileChange::ChangeMode { path, mode } => {
                 Operation::File(FileOperation::ChangeMode { path, mode })
             }

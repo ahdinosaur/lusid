@@ -49,7 +49,10 @@ impl Display for UserParams {
         match self {
             UserParams::Present { name, .. } => write!(f, "User::Present(name = {name})"),
             UserParams::Absent { name, remove_home } => {
-                write!(f, "User::Absent(name = {name}, remove_home = {remove_home:?})")
+                write!(
+                    f,
+                    "User::Absent(name = {name}, remove_home = {remove_home:?})"
+                )
             }
         }
     }
@@ -81,7 +84,10 @@ impl Display for UserResource {
         match self {
             UserResource::Present { name, .. } => write!(f, "User::Present(name = {name})"),
             UserResource::Absent { name, remove_home } => {
-                write!(f, "User::Absent(name = {name}, remove_home = {remove_home})")
+                write!(
+                    f,
+                    "User::Absent(name = {name}, remove_home = {remove_home})"
+                )
             }
         }
     }
@@ -182,7 +188,10 @@ impl Display for UserChange {
             UserChange::Create { name, .. } => write!(f, "User::Create(name = {name})"),
             UserChange::Modify { name, .. } => write!(f, "User::Modify(name = {name})"),
             UserChange::Delete { name, remove_home } => {
-                write!(f, "User::Delete(name = {name}, remove_home = {remove_home})")
+                write!(
+                    f,
+                    "User::Delete(name = {name}, remove_home = {remove_home})"
+                )
             }
         }
     }
@@ -313,13 +322,12 @@ impl ResourceType for User {
         match (resource, state) {
             (UserResource::Absent { .. }, UserState::Absent) => None,
 
-            (
-                UserResource::Absent { name, remove_home },
-                UserState::Present { .. },
-            ) => Some(UserChange::Delete {
-                name: name.clone(),
-                remove_home: *remove_home,
-            }),
+            (UserResource::Absent { name, remove_home }, UserState::Present { .. }) => {
+                Some(UserChange::Delete {
+                    name: name.clone(),
+                    remove_home: *remove_home,
+                })
+            }
 
             (
                 UserResource::Present {
