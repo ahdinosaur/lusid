@@ -47,6 +47,7 @@ use crate::resources::command::{
 };
 use crate::resources::file::{File, FileChange, FileResource, FileState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
+use crate::resources::group::{Group, GroupChange, GroupParams, GroupResource, GroupState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 use crate::resources::systemd::{
     Systemd, SystemdChange, SystemdParams, SystemdResource, SystemdState,
@@ -112,6 +113,7 @@ pub enum ResourceParams {
     Git(GitParams),
     Systemd(SystemdParams),
     User(UserParams),
+    Group(GroupParams),
 }
 
 impl Display for ResourceParams {
@@ -126,6 +128,7 @@ impl Display for ResourceParams {
             Git(params) => params.fmt(f),
             Systemd(params) => params.fmt(f),
             User(params) => params.fmt(f),
+            Group(params) => params.fmt(f),
         }
     }
 }
@@ -142,6 +145,7 @@ impl Render for ResourceParams {
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -157,6 +161,7 @@ pub enum Resource {
     Git(GitResource),
     Systemd(SystemdResource),
     User(UserResource),
+    Group(GroupResource),
 }
 
 impl Display for Resource {
@@ -171,6 +176,7 @@ impl Display for Resource {
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
             User(user) => user.fmt(f),
+            Group(group) => group.fmt(f),
         }
     }
 }
@@ -187,6 +193,7 @@ impl Render for Resource {
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -205,6 +212,7 @@ pub enum ResourceState {
     Git(GitState),
     Systemd(SystemdState),
     User(UserState),
+    Group(GroupState),
 }
 
 impl Display for ResourceState {
@@ -219,6 +227,7 @@ impl Display for ResourceState {
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
             User(user) => user.fmt(f),
+            Group(group) => group.fmt(f),
         }
     }
 }
@@ -235,6 +244,7 @@ impl Render for ResourceState {
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -264,6 +274,9 @@ pub enum ResourceStateError {
 
     #[error("user state error: {0}")]
     User(#[from] <User as ResourceType>::StateError),
+
+    #[error("group state error: {0}")]
+    Group(#[from] <Group as ResourceType>::StateError),
 }
 
 /// Dispatcher over every resource's `Change`.
@@ -277,6 +290,7 @@ pub enum ResourceChange {
     Git(GitChange),
     Systemd(SystemdChange),
     User(UserChange),
+    Group(GroupChange),
 }
 
 impl Display for ResourceChange {
@@ -291,6 +305,7 @@ impl Display for ResourceChange {
             Git(git) => git.fmt(f),
             Systemd(systemd) => systemd.fmt(f),
             User(user) => user.fmt(f),
+            Group(group) => group.fmt(f),
         }
     }
 }
@@ -307,6 +322,7 @@ impl Render for ResourceChange {
             Git(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
+            Group(params) => params.render(),
         }
     }
 }
@@ -334,6 +350,7 @@ impl ResourceParams {
             ResourceParams::Git(params) => typed::<Git>(params, Resource::Git),
             ResourceParams::Systemd(params) => typed::<Systemd>(params, Resource::Systemd),
             ResourceParams::User(params) => typed::<User>(params, Resource::User),
+            ResourceParams::Group(params) => typed::<Group>(params, Resource::Group),
         }
     }
 }
@@ -406,6 +423,15 @@ impl Resource {
                 )
                 .await
             }
+            Resource::Group(resource) => {
+                typed::<Group>(
+                    ctx,
+                    resource,
+                    ResourceState::Group,
+                    ResourceStateError::Group,
+                )
+                .await
+            }
         }
     }
 
@@ -453,6 +479,9 @@ impl Resource {
             (Resource::User(resource), ResourceState::User(state)) => {
                 typed::<User>(resource, state, ResourceChange::User)
             }
+            (Resource::Group(resource), ResourceState::Group(state)) => {
+                typed::<Group>(resource, state, ResourceChange::Group)
+            }
             _ => {
                 // Programmer error, should never happen, or if it does should be immediately obvious.
                 panic!("Unmatched resource and state")
@@ -474,6 +503,7 @@ impl ResourceChange {
             ResourceChange::Git(change) => Git::operations(change),
             ResourceChange::Systemd(change) => Systemd::operations(change),
             ResourceChange::User(change) => User::operations(change),
+            ResourceChange::Group(change) => Group::operations(change),
         }
     }
 }

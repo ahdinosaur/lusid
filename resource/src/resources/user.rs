@@ -31,7 +31,12 @@ pub enum UserParams {
         name: String,
         uid: Option<u32>,
         group: Option<String>,
-        extra_groups: Option<Vec<String>>,
+        /// Supplementary groups the user must belong to. Missing groups are
+        /// added; groups the user is already in are left alone, and groups not
+        /// listed here are *not* removed — this is append-only, not an exact
+        /// list. `None` or an empty list means "don't touch supplementary group
+        /// membership".
+        append_groups: Option<Vec<String>>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -63,7 +68,7 @@ pub enum UserResource {
         name: String,
         uid: Option<u32>,
         group: Option<String>,
-        extra_groups: Option<Vec<String>>,
+        append_groups: Option<Vec<String>>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -154,7 +159,10 @@ pub enum UserChange {
         name: String,
         uid: Option<u32>,
         primary_group: Option<String>,
-        supplementary_groups: Vec<String>,
+        /// Supplementary groups to append at creation. On a fresh `useradd`,
+        /// there are no existing groups to merge with, so this is just the set
+        /// to install.
+        append_groups: Vec<String>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -165,7 +173,10 @@ pub enum UserChange {
         name: String,
         uid: Option<u32>,
         primary_group: Option<String>,
-        supplementary_groups: Option<Vec<String>>,
+        /// Declared supplementary groups that the user is not yet a member of.
+        /// `None` means no membership change is needed; `Some` means append
+        /// these via `usermod -aG` without touching the rest.
+        append_groups: Option<Vec<String>>,
         comment: Option<String>,
         home: Option<FilePath>,
         shell: Option<String>,
@@ -217,7 +228,7 @@ impl ResourceType for User {
                     "name".to_string() => field(ParamType::String, true),
                     "uid".to_string() => field(ParamType::Number, false),
                     "group".to_string() => field(ParamType::String, false),
-                    "extra_groups".to_string() => field(string_list(), false),
+                    "append_groups".to_string() => field(string_list(), false),
                     "comment".to_string() => field(ParamType::String, false),
                     "home".to_string() => field(ParamType::TargetPath, false),
                     "shell".to_string() => field(ParamType::String, false),
@@ -243,7 +254,7 @@ impl ResourceType for User {
                 name,
                 uid,
                 group,
-                extra_groups,
+                append_groups,
                 comment,
                 home,
                 shell,
@@ -255,7 +266,7 @@ impl ResourceType for User {
                     name,
                     uid,
                     group,
-                    extra_groups,
+                    append_groups,
                     comment,
                     home,
                     shell,
@@ -326,7 +337,7 @@ impl ResourceType for User {
                     name,
                     uid,
                     group,
-                    extra_groups,
+                    append_groups,
                     comment,
                     home,
                     shell,
@@ -338,7 +349,7 @@ impl ResourceType for User {
                 name: name.clone(),
                 uid: *uid,
                 primary_group: group.clone(),
-                supplementary_groups: extra_groups.clone().unwrap_or_default(),
+                append_groups: append_groups.clone().unwrap_or_default(),
                 comment: comment.clone(),
                 home: home.clone(),
                 shell: shell.clone(),
@@ -351,7 +362,7 @@ impl ResourceType for User {
                     name,
                     uid,
                     group,
-                    extra_groups,
+                    append_groups,
                     comment,
                     home,
                     shell,
@@ -374,15 +385,21 @@ impl ResourceType for User {
                     .filter(|declared| declared.as_str() != current_primary_group.as_str())
                     .cloned();
 
-                let extra_groups_change = extra_groups.as_ref().and_then(|declared| {
+                let append_groups_change = append_groups.as_ref().and_then(|declared| {
                     let current: BTreeSet<&str> =
                         current_extra_groups.iter().map(String::as_str).collect();
-                    let declared_set: BTreeSet<&str> =
-                        declared.iter().map(String::as_str).collect();
-                    if declared_set == current {
+                    let mut seen: BTreeSet<&str> = BTreeSet::new();
+                    let missing: Vec<String> = declared
+                        .iter()
+                        .filter(|group| {
+                            !current.contains(group.as_str()) && seen.insert(group.as_str())
+                        })
+                        .cloned()
+                        .collect();
+                    if missing.is_empty() {
                         None
                     } else {
-                        Some(declared.clone())
+                        Some(missing)
                     }
                 });
 
@@ -408,7 +425,7 @@ impl ResourceType for User {
 
                 if uid_change.is_none()
                     && group_change.is_none()
-                    && extra_groups_change.is_none()
+                    && append_groups_change.is_none()
                     && comment_change.is_none()
                     && home_change.is_none()
                     && shell_change.is_none()
@@ -419,7 +436,7 @@ impl ResourceType for User {
                         name: name.clone(),
                         uid: uid_change,
                         primary_group: group_change,
-                        supplementary_groups: extra_groups_change,
+                        append_groups: append_groups_change,
                         comment: comment_change,
                         home: home_change,
                         shell: shell_change,
@@ -435,7 +452,7 @@ impl ResourceType for User {
                 name,
                 uid,
                 primary_group,
-                supplementary_groups,
+                append_groups,
                 comment,
                 home,
                 shell,
@@ -445,7 +462,7 @@ impl ResourceType for User {
                 name,
                 uid,
                 primary_group,
-                supplementary_groups,
+                append_groups,
                 comment,
                 home,
                 shell,
@@ -456,7 +473,7 @@ impl ResourceType for User {
                 name,
                 uid,
                 primary_group,
-                supplementary_groups,
+                append_groups,
                 comment,
                 home,
                 shell,
@@ -464,7 +481,7 @@ impl ResourceType for User {
                 name,
                 uid,
                 primary_group,
-                supplementary_groups,
+                append_groups,
                 comment,
                 home,
                 shell,
