@@ -97,19 +97,19 @@ impl Display for FileGroup {
 
 #[derive(Debug, Clone)]
 pub enum FileOperation {
-    WriteFile {
+    Write {
         path: FilePath,
         source: FileSource,
     },
-    CopyFile {
+    Copy {
         source: FilePath,
         destination: FilePath,
     },
-    MoveFile {
+    Move {
         source: FilePath,
         destination: FilePath,
     },
-    RemoveFile {
+    Remove {
         path: FilePath,
     },
     CreateSymlink {
@@ -130,36 +130,36 @@ pub enum FileOperation {
 impl Display for FileOperation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FileOperation::WriteFile { path, source } => match source {
+            FileOperation::Write { path, source } => match source {
                 FileSource::Contents(contents) => write!(
                     f,
-                    "File::WriteFile(path = {}, source = Contents({} bytes))",
+                    "File::Write(path = {}, source = Contents({} bytes))",
                     path,
                     contents.len()
                 ),
                 FileSource::Path(source_path) => write!(
                     f,
-                    "File::WriteFile(path = {}, source = Path({}))",
+                    "File::Write(path = {}, source = Path({}))",
                     path, source_path
                 ),
             },
-            FileOperation::CopyFile {
+            FileOperation::Copy {
                 source,
                 destination,
             } => write!(
                 f,
-                "File::CopyFile(source = {}, destination = {})",
+                "File::Copy(source = {}, destination = {})",
                 source, destination
             ),
-            FileOperation::MoveFile {
+            FileOperation::Move {
                 source,
                 destination,
             } => write!(
                 f,
-                "File::MoveFile(source = {}, destination = {})",
+                "File::Move(source = {}, destination = {})",
                 source, destination
             ),
-            FileOperation::RemoveFile { path } => write!(f, "File::RemoveFile(path = {})", path),
+            FileOperation::Remove { path } => write!(f, "File::Remove(path = {})", path),
             FileOperation::CreateSymlink { source, path } => write!(
                 f,
                 "File::CreateSymlink(source = {}, path = {})",
@@ -206,7 +206,7 @@ impl OperationType for File {
         let stderr = Box::pin(tokio::io::empty());
 
         match operation.clone() {
-            FileOperation::WriteFile { path, source } => {
+            FileOperation::Write { path, source } => {
                 info!("[file] write file: {}", path);
                 Ok((
                     Box::pin(async move {
@@ -223,7 +223,7 @@ impl OperationType for File {
                     stderr,
                 ))
             }
-            FileOperation::CopyFile {
+            FileOperation::Copy {
                 source,
                 destination,
             } => {
@@ -236,7 +236,7 @@ impl OperationType for File {
                     stderr,
                 ))
             }
-            FileOperation::MoveFile {
+            FileOperation::Move {
                 source,
                 destination,
             } => {
@@ -249,7 +249,7 @@ impl OperationType for File {
                     stderr,
                 ))
             }
-            FileOperation::RemoveFile { path } => {
+            FileOperation::Remove { path } => {
                 info!("[file] remove file: {}", path);
                 Ok((
                     Box::pin(async move { fs::remove_file(path.as_path()).await }),

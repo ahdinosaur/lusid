@@ -19,6 +19,6 @@ setup: (params) =>
 
   - module: "@core/file"
     params:
-      type: "source"
+      state: "sourced"
       source: "./hello.txt"
       path: "/tmp/hello.txt"
