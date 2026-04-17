@@ -2,7 +2,7 @@ use std::io::{BufRead, Read};
 use std::pin::Pin;
 use std::task::{Context, Poll, ready};
 
-use russh::CryptoVec;
+use bytes::Bytes;
 use tokio::io::{AsyncBufRead, AsyncRead, ReadBuf};
 use tokio::sync::mpsc;
 
@@ -10,12 +10,12 @@ use tokio::sync::mpsc;
 ///
 /// Implements AsyncRead, AsyncBufRead, Read, and BufRead.
 pub struct ReadStream {
-    recv: mpsc::UnboundedReceiver<CryptoVec>,
-    buffer: Option<(CryptoVec, usize)>,
+    recv: mpsc::UnboundedReceiver<Bytes>,
+    buffer: Option<(Bytes, usize)>,
 }
 
 impl ReadStream {
-    pub(crate) fn from_recv(recv: mpsc::UnboundedReceiver<CryptoVec>) -> Self {
+    pub(crate) fn from_recv(recv: mpsc::UnboundedReceiver<Bytes>) -> Self {
         Self { recv, buffer: None }
     }
 
