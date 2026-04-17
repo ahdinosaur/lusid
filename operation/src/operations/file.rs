@@ -112,6 +112,12 @@ pub enum FileOperation {
     RemoveFile {
         path: FilePath,
     },
+    CreateDirectory {
+        path: FilePath,
+    },
+    RemoveDirectory {
+        path: FilePath,
+    },
     CreateSymlink {
         source: FilePath,
         path: FilePath,
@@ -160,6 +166,12 @@ impl Display for FileOperation {
                 source, destination
             ),
             FileOperation::RemoveFile { path } => write!(f, "File::RemoveFile(path = {})", path),
+            FileOperation::CreateDirectory { path } => {
+                write!(f, "File::CreateDirectory(path = {})", path)
+            }
+            FileOperation::RemoveDirectory { path } => {
+                write!(f, "File::RemoveDirectory(path = {})", path)
+            }
             FileOperation::CreateSymlink { source, path } => write!(
                 f,
                 "File::CreateSymlink(source = {}, path = {})",
@@ -253,6 +265,22 @@ impl OperationType for File {
                 info!("[file] remove file: {}", path);
                 Ok((
                     Box::pin(async move { fs::remove_file(path.as_path()).await }),
+                    stdout,
+                    stderr,
+                ))
+            }
+            FileOperation::CreateDirectory { path } => {
+                info!("[file] create directory: {}", path);
+                Ok((
+                    Box::pin(async move { fs::create_dir(path.as_path()).await }),
+                    stdout,
+                    stderr,
+                ))
+            }
+            FileOperation::RemoveDirectory { path } => {
+                info!("[file] remove directory: {}", path);
+                Ok((
+                    Box::pin(async move { fs::remove_dir(path.as_path()).await }),
                     stdout,
                     stderr,
                 ))

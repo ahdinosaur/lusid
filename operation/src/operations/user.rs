@@ -50,10 +50,7 @@ impl Display for UserOperation {
             UserOperation::Add { name, .. } => write!(f, "User::Add(name = {name})"),
             UserOperation::Modify { name, .. } => write!(f, "User::Modify(name = {name})"),
             UserOperation::Delete { name, remove_home } => {
-                write!(
-                    f,
-                    "User::Delete(name = {name}, remove_home = {remove_home})"
-                )
+                write!(f, "User::Delete(name = {name}, remove_home = {remove_home})")
             }
         }
     }

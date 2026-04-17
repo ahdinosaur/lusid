@@ -37,7 +37,6 @@ use crate::operations::{
     apt::{Apt, AptOperation},
     apt_repo::{AptRepo, AptRepoOperation},
     command::{Command, CommandOperation},
-    directory::{Directory, DirectoryOperation},
     file::{File, FileOperation},
     git::{Git, GitOperation},
     group::{Group, GroupOperation},
@@ -88,7 +87,6 @@ pub enum Operation {
     AptRepo(AptRepoOperation),
     Pacman(PacmanOperation),
     File(FileOperation),
-    Directory(DirectoryOperation),
     Command(CommandOperation),
     Git(GitOperation),
     Systemd(SystemdOperation),
@@ -108,7 +106,6 @@ impl Operation {
             apt_repo,
             pacman,
             file,
-            directory,
             command,
             git,
             systemd,
@@ -121,11 +118,6 @@ impl Operation {
             .chain(AptRepo::merge(apt_repo).into_iter().map(Operation::AptRepo))
             .chain(Pacman::merge(pacman).into_iter().map(Operation::Pacman))
             .chain(File::merge(file).into_iter().map(Operation::File))
-            .chain(
-                Directory::merge(directory)
-                    .into_iter()
-                    .map(Operation::Directory),
-            )
             .chain(Command::merge(command).into_iter().map(Operation::Command))
             .chain(Git::merge(git).into_iter().map(Operation::Git))
             .chain(Systemd::merge(systemd).into_iter().map(Operation::Systemd))
@@ -149,9 +141,6 @@ pub enum OperationApplyError {
 
     #[error("file operation failed: {0:?}")]
     File(<File as OperationType>::ApplyError),
-
-    #[error("directory operation failed: {0:?}")]
-    Directory(<Directory as OperationType>::ApplyError),
 
     #[error("command operation failed: {0:?}")]
     Command(<Command as OperationType>::ApplyError),
@@ -177,7 +166,6 @@ pub enum OperationApplyOutput {
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyOutput),
     Pacman(#[pin] <Pacman as OperationType>::ApplyOutput),
     File(#[pin] <File as OperationType>::ApplyOutput),
-    Directory(#[pin] <Directory as OperationType>::ApplyOutput),
     Command(#[pin] <Command as OperationType>::ApplyOutput),
     Git(#[pin] <Git as OperationType>::ApplyOutput),
     Systemd(#[pin] <Systemd as OperationType>::ApplyOutput),
@@ -195,7 +183,6 @@ impl Future for OperationApplyOutput {
             AptRepo(fut) => fut.poll(cx).map_err(OperationApplyError::AptRepo),
             Pacman(fut) => fut.poll(cx).map_err(OperationApplyError::Pacman),
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
-            Directory(fut) => fut.poll(cx).map_err(OperationApplyError::Directory),
             Command(fut) => fut.poll(cx).map_err(OperationApplyError::Command),
             Git(fut) => fut.poll(cx).map_err(OperationApplyError::Git),
             Systemd(fut) => fut.poll(cx).map_err(OperationApplyError::Systemd),
@@ -213,7 +200,6 @@ pub enum OperationApplyStdout {
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyStdout),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStdout),
     File(#[pin] <File as OperationType>::ApplyStdout),
-    Directory(#[pin] <Directory as OperationType>::ApplyStdout),
     Command(#[pin] <Command as OperationType>::ApplyStdout),
     Git(#[pin] <Git as OperationType>::ApplyStdout),
     Systemd(#[pin] <Systemd as OperationType>::ApplyStdout),
@@ -233,7 +219,6 @@ impl AsyncRead for OperationApplyStdout {
             AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
-            Directory(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
             Systemd(stream) => stream.poll_read(cx, buf),
@@ -251,7 +236,6 @@ pub enum OperationApplyStderr {
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyStderr),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStderr),
     File(#[pin] <File as OperationType>::ApplyStderr),
-    Directory(#[pin] <Directory as OperationType>::ApplyStderr),
     Command(#[pin] <Command as OperationType>::ApplyStderr),
     Git(#[pin] <Git as OperationType>::ApplyStderr),
     Systemd(#[pin] <Systemd as OperationType>::ApplyStderr),
@@ -271,7 +255,6 @@ impl AsyncRead for OperationApplyStderr {
             AptRepo(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
-            Directory(stream) => stream.poll_read(cx, buf),
             Command(stream) => stream.poll_read(cx, buf),
             Git(stream) => stream.poll_read(cx, buf),
             Systemd(stream) => stream.poll_read(cx, buf),
@@ -337,16 +320,6 @@ impl Operation {
                     OperationApplyStderr::File(stderr),
                 ))
             }
-            Operation::Directory(op) => {
-                let (output, stdout, stderr) = Directory::apply(ctx, op)
-                    .await
-                    .map_err(OperationApplyError::Directory)?;
-                Ok((
-                    OperationApplyOutput::Directory(output),
-                    OperationApplyStdout::Directory(stdout),
-                    OperationApplyStderr::Directory(stderr),
-                ))
-            }
             Operation::Command(op) => {
                 let (output, stdout, stderr) = Command::apply(ctx, op)
                     .await
@@ -409,7 +382,6 @@ impl Display for Operation {
             AptRepo(op) => Display::fmt(op, f),
             Pacman(op) => Display::fmt(op, f),
             File(op) => Display::fmt(op, f),
-            Directory(op) => Display::fmt(op, f),
             Command(op) => Display::fmt(op, f),
             Git(op) => Display::fmt(op, f),
             Systemd(op) => Display::fmt(op, f),
@@ -426,7 +398,6 @@ impl Render for Operation {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
-            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
@@ -444,7 +415,6 @@ pub struct OperationsByType {
     apt_repo: Vec<AptRepoOperation>,
     pacman: Vec<PacmanOperation>,
     file: Vec<FileOperation>,
-    directory: Vec<DirectoryOperation>,
     command: Vec<CommandOperation>,
     git: Vec<GitOperation>,
     systemd: Vec<SystemdOperation>,
@@ -458,7 +428,6 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     let mut apt_repo: Vec<AptRepoOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
-    let mut directory: Vec<DirectoryOperation> = Vec::new();
     let mut command: Vec<CommandOperation> = Vec::new();
     let mut git: Vec<GitOperation> = Vec::new();
     let mut systemd: Vec<SystemdOperation> = Vec::new();
@@ -470,7 +439,6 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
             Operation::AptRepo(op) => apt_repo.push(op),
             Operation::Pacman(op) => pacman.push(op),
             Operation::File(op) => file.push(op),
-            Operation::Directory(op) => directory.push(op),
             Operation::Command(op) => command.push(op),
             Operation::Git(op) => git.push(op),
             Operation::Systemd(op) => systemd.push(op),
@@ -483,7 +451,6 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
         apt_repo,
         pacman,
         file,
-        directory,
         command,
         git,
         systemd,

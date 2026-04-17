@@ -45,9 +45,6 @@ use crate::resources::apt_repo::{
 use crate::resources::command::{
     Command, CommandChange, CommandParams, CommandResource, CommandState,
 };
-use crate::resources::directory::{
-    Directory, DirectoryChange, DirectoryParams, DirectoryResource, DirectoryState,
-};
 use crate::resources::file::{File, FileChange, FileResource, FileState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
 use crate::resources::group::{Group, GroupChange, GroupParams, GroupResource, GroupState};
@@ -111,7 +108,6 @@ pub enum ResourceParams {
     Apt(AptParams),
     AptRepo(AptRepoParams),
     File(FileParams),
-    Directory(DirectoryParams),
     Pacman(PacmanParams),
     Command(CommandParams),
     Git(GitParams),
@@ -127,7 +123,6 @@ impl Display for ResourceParams {
             Apt(params) => params.fmt(f),
             AptRepo(params) => params.fmt(f),
             File(params) => params.fmt(f),
-            Directory(params) => params.fmt(f),
             Pacman(params) => params.fmt(f),
             Command(params) => params.fmt(f),
             Git(params) => params.fmt(f),
@@ -145,7 +140,6 @@ impl Render for ResourceParams {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
-            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
@@ -162,7 +156,6 @@ pub enum Resource {
     Apt(AptResource),
     AptRepo(AptRepoResource),
     File(FileResource),
-    Directory(DirectoryResource),
     Pacman(PacmanResource),
     Command(CommandResource),
     Git(GitResource),
@@ -178,7 +171,6 @@ impl Display for Resource {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
-            Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
@@ -196,7 +188,6 @@ impl Render for Resource {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
-            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
@@ -216,7 +207,6 @@ pub enum ResourceState {
     Apt(AptState),
     AptRepo(AptRepoState),
     File(FileState),
-    Directory(DirectoryState),
     Pacman(PacmanState),
     Command(CommandState),
     Git(GitState),
@@ -232,7 +222,6 @@ impl Display for ResourceState {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
-            Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
@@ -250,7 +239,6 @@ impl Render for ResourceState {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
-            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
@@ -273,10 +261,6 @@ pub enum ResourceStateError {
 
     #[error("file state error: {0}")]
     File(#[from] <File as ResourceType>::StateError),
-
-    #[error("directory state error: {0}")]
-    Directory(#[from] <Directory as ResourceType>::StateError),
-
     #[error("pacman state error: {0}")]
     Pacman(#[from] <Pacman as ResourceType>::StateError),
     #[error("command state error: {0}")]
@@ -301,7 +285,6 @@ pub enum ResourceChange {
     Apt(AptChange),
     AptRepo(AptRepoChange),
     File(FileChange),
-    Directory(DirectoryChange),
     Pacman(PacmanChange),
     Command(CommandChange),
     Git(GitChange),
@@ -317,7 +300,6 @@ impl Display for ResourceChange {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
             File(file) => file.fmt(f),
-            Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
             Command(command) => command.fmt(f),
             Git(git) => git.fmt(f),
@@ -335,7 +317,6 @@ impl Render for ResourceChange {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
             File(params) => params.render(),
-            Directory(params) => params.render(),
             Pacman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
@@ -364,7 +345,6 @@ impl ResourceParams {
             ResourceParams::Apt(params) => typed::<Apt>(params, Resource::Apt),
             ResourceParams::AptRepo(params) => typed::<AptRepo>(params, Resource::AptRepo),
             ResourceParams::File(params) => typed::<File>(params, Resource::File),
-            ResourceParams::Directory(params) => typed::<Directory>(params, Resource::Directory),
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
             ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
             ResourceParams::Git(params) => typed::<Git>(params, Resource::Git),
@@ -404,15 +384,6 @@ impl Resource {
             Resource::File(resource) => {
                 typed::<File>(ctx, resource, ResourceState::File, ResourceStateError::File).await
             }
-            Resource::Directory(resource) => {
-                typed::<Directory>(
-                    ctx,
-                    resource,
-                    ResourceState::Directory,
-                    ResourceStateError::Directory,
-                )
-                .await
-            }
             Resource::Pacman(resource) => {
                 typed::<Pacman>(
                     ctx,
@@ -444,7 +415,13 @@ impl Resource {
                 .await
             }
             Resource::User(resource) => {
-                typed::<User>(ctx, resource, ResourceState::User, ResourceStateError::User).await
+                typed::<User>(
+                    ctx,
+                    resource,
+                    ResourceState::User,
+                    ResourceStateError::User,
+                )
+                .await
             }
             Resource::Group(resource) => {
                 typed::<Group>(
@@ -487,9 +464,6 @@ impl Resource {
             (Resource::File(resource), ResourceState::File(state)) => {
                 typed::<File>(resource, state, ResourceChange::File)
             }
-            (Resource::Directory(resource), ResourceState::Directory(state)) => {
-                typed::<Directory>(resource, state, ResourceChange::Directory)
-            }
             (Resource::Pacman(resource), ResourceState::Pacman(state)) => {
                 typed::<Pacman>(resource, state, ResourceChange::Pacman)
             }
@@ -524,7 +498,6 @@ impl ResourceChange {
             ResourceChange::Apt(change) => Apt::operations(change),
             ResourceChange::AptRepo(change) => AptRepo::operations(change),
             ResourceChange::File(change) => File::operations(change),
-            ResourceChange::Directory(change) => Directory::operations(change),
             ResourceChange::Pacman(change) => Pacman::operations(change),
             ResourceChange::Command(change) => Command::operations(change),
             ResourceChange::Git(change) => Git::operations(change),
