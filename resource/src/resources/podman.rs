@@ -25,6 +25,11 @@ use crate::ResourceType;
 /// Tagged by `state: "present" | "absent"`. Mirrors the shape of Ansible's
 /// `containers.podman.podman_container` at a conservative subset — enough to
 /// declare a long-running container without wrapping every podman flag.
+///
+/// Drift is decided by the *declared* spec, not the resolved image digest.
+/// An upstream change to a floating tag (e.g. `nginx:latest` republished)
+/// will not trigger a recreate — pin with `@sha256:...` for digest-level
+/// control.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum PodmanParams {
@@ -100,8 +105,8 @@ pub enum PodmanState {
         /// drift detection uses [`config_hash`] below.
         image: String,
         running: bool,
-        /// Value of the `lusid.config-hash` label on the running container,
-        /// or `None` if the label is missing. `None` is treated as drift.
+        /// Value of the [`CONFIG_HASH_LABEL`] on the running container, or
+        /// `None` if the label is missing. `None` is treated as drift.
         config_hash: Option<String>,
     },
 }
@@ -840,17 +845,16 @@ mod tests {
     #[test]
     fn change_start_when_only_running_differs() {
         let spec = ResourceSpec::default();
-        let current = PodmanState::Present {
-            image: canonicalize_image(&spec.image),
-            running: false,
-            config_hash: Some(config_hash(
-                &spec.image,
-                spec.command.as_ref(),
-                &spec.env,
-                &spec.ports,
-                &spec.volumes,
-                spec.restart_policy.as_ref(),
-            )),
+        // Hash matches, only `running` flips — should be Start, not Recreate.
+        let current = match state_matching(&spec) {
+            PodmanState::Present {
+                image, config_hash, ..
+            } => PodmanState::Present {
+                image,
+                running: false,
+                config_hash,
+            },
+            PodmanState::Absent => unreachable!(),
         };
         let change = Podman::change(&resource(spec), &current).expect("change");
         assert!(matches!(change, PodmanChange::Start { .. }));
