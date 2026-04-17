@@ -498,12 +498,6 @@ impl Resource {
             R::change(resource, state).map(map)
         }
 
-        // Note(cc): the `#[allow(unreachable_patterns)]` dates from when only one
-        // resource existed and the `_` arm really was unreachable. With five variants
-        // the `_` arm is reachable (e.g. `(Resource::Apt, ResourceState::File)`) and
-        // the allow is likely stale — leaving it for now to avoid churn, but it can
-        // probably be removed.
-        #[allow(unreachable_patterns)]
         match (self, state) {
             (Resource::Apt(resource), ResourceState::Apt(state)) => {
                 typed::<Apt>(resource, state, ResourceChange::Apt)

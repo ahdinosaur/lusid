@@ -20,11 +20,14 @@ use crate::ResourceType;
 /// `containers.podman.podman_container` at a conservative subset — enough to
 /// declare a long-running container without wrapping every podman flag.
 // TODO(cc): spec-drift detection covers `image` (canonicalised), `command`,
-// `volumes`, and `restart_policy`. Changes to `env` or `ports` will NOT yet
+// and `restart_policy`. Changes to `env`, `ports`, or `volumes` will NOT yet
 // trigger a recreate — `.Config.Env` mixes user values with image defaults
-// (requires a subset check or a label written at create time), and
+// (requires a subset check or a label written at create time);
 // `.HostConfig.PortBindings` is a map that doesn't round-trip cleanly from
-// the user's "HOST:CONTAINER[/proto]" strings. See `change()` for detail.
+// the user's "HOST:CONTAINER[/proto]" strings; and `.HostConfig.Binds` may
+// be normalised by podman (e.g. SELinux relabel flags) in version-dependent
+// ways, so a naive string compare causes false-positive recreates. See
+// `change()` for detail.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum PodmanParams {
@@ -100,7 +103,6 @@ pub enum PodmanState {
         image: String,
         running: bool,
         command: Option<Vec<String>>,
-        volumes: Vec<String>,
         restart_policy: Option<String>,
     },
 }
@@ -160,9 +162,6 @@ struct InspectConfig {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct InspectHostConfig {
-    #[serde(rename = "Binds", default)]
-    binds: Vec<String>,
-
     #[serde(rename = "RestartPolicy", default)]
     restart_policy: InspectRestartPolicy,
 }
@@ -351,7 +350,6 @@ impl ResourceType for Podman {
             image: canonicalize_image(&container.image_name),
             running: container.state.running,
             command: container.config.cmd,
-            volumes: container.host_config.binds,
             restart_policy,
         })
     }
@@ -404,18 +402,20 @@ impl ResourceType for Podman {
                     image: current_image,
                     running: current_running,
                     command: current_command,
-                    volumes: current_volumes,
                     restart_policy: current_restart_policy,
                 },
             ) => {
-                // Note(cc): env and ports are deliberately not compared here.
-                // `.Config.Env` includes image defaults plus things like PATH,
-                // so a raw compare against the user's declared env would always
-                // drift; detecting it properly needs either a subset check or
-                // a label written at create time. `.HostConfig.PortBindings`
+                // Note(cc): env, ports, and volumes are deliberately not compared
+                // here. `.Config.Env` includes image defaults plus things like
+                // PATH, so a raw compare against the user's declared env would
+                // always drift; detecting it properly needs either a subset check
+                // or a label written at create time. `.HostConfig.PortBindings`
                 // is a map<container/proto, [{HostIp, HostPort}]>, and
                 // round-tripping the user's "HOST:CONTAINER[/proto]" strings
-                // through that shape isn't trivial. Left as follow-ups.
+                // through that shape isn't trivial. `.HostConfig.Binds` may be
+                // normalised by podman in version-dependent ways (e.g. SELinux
+                // relabel flags), so a naive string compare causes false-positive
+                // recreates. All three are left as follow-ups.
                 let declared_image = canonicalize_image(image);
                 let command_drift = command
                     .as_ref()
@@ -423,13 +423,8 @@ impl ResourceType for Podman {
                 let restart_drift = restart_policy
                     .as_ref()
                     .is_some_and(|declared| Some(declared) != current_restart_policy.as_ref());
-                let volumes_drift = volumes != current_volumes;
 
-                if declared_image != *current_image
-                    || command_drift
-                    || restart_drift
-                    || volumes_drift
-                {
+                if declared_image != *current_image || command_drift || restart_drift {
                     Some(PodmanChange::Recreate {
                         name: name.clone(),
                         image: image.clone(),
@@ -564,24 +559,34 @@ fn create_ops(
 }
 
 /// Best-effort canonicalisation of a container image reference to the form
-/// that `podman inspect` typically reports (`<registry>/<repo>:<tag>`), so that
-/// `nginx:latest` and `docker.io/library/nginx:latest` compare equal when
-/// deciding if the current container matches the declared spec.
-///
-/// This intentionally does **not** handle digest references (`name@sha256:…`);
-/// those are returned unchanged so a declared digest still matches itself.
+/// that `podman inspect` typically reports (`<registry>/<repo>:<tag>` or
+/// `<registry>/<repo>@<digest>`), so that short forms like `nginx:latest` or
+/// `nginx@sha256:…` compare equal to their fully-qualified inspect output
+/// when deciding if the current container matches the declared spec.
 fn canonicalize_image(reference: &str) -> String {
-    // Digest references are already unambiguous — leave them alone.
-    if reference.contains('@') {
-        return reference.to_string();
-    }
+    // Split off a digest if present. The digest itself is already unambiguous,
+    // but the name preceding it still needs the same registry/repo prefixing
+    // as a tagged reference. OCI also permits `name:tag@digest`, so the tag
+    // splitting below still applies to the `head` either way.
+    let (head, digest) = match reference.split_once('@') {
+        Some((head, digest)) => (head, Some(digest.to_string())),
+        None => (reference, None),
+    };
 
-    // Split off the tag, if any. The tag delimiter is the *last* `:`, but only
-    // when it's after the final `/` (otherwise it's a registry port like
-    // `localhost:5000/foo`).
-    let (name, tag) = match reference.rsplit_once(':') {
-        Some((name, tag)) if !tag.contains('/') => (name.to_string(), tag.to_string()),
-        _ => (reference.to_string(), "latest".to_string()),
+    // Split off a tag from the head, if any. The tag delimiter is the *last*
+    // `:`, but only when it's after the final `/` (otherwise it's a registry
+    // port like `localhost:5000/foo`).
+    let (name, tag) = match head.rsplit_once(':') {
+        Some((name, tag)) if !tag.contains('/') => (name.to_string(), Some(tag.to_string())),
+        _ => (head.to_string(), None),
+    };
+
+    // Default to `:latest` only when nothing pins the image. A digest reference
+    // without an explicit tag is left tag-less, which is the form `inspect`
+    // reports for digest-pinned containers.
+    let tag = match (&tag, &digest) {
+        (None, None) => Some("latest".to_string()),
+        _ => tag,
     };
 
     // Does `name` start with a registry host? The OCI rule: if the first
@@ -595,7 +600,16 @@ fn canonicalize_image(reference: &str) -> String {
         None => format!("docker.io/library/{name}"),
     };
 
-    format!("{name}:{tag}")
+    let mut out = name;
+    if let Some(tag) = tag {
+        out.push(':');
+        out.push_str(&tag);
+    }
+    if let Some(digest) = digest {
+        out.push('@');
+        out.push_str(&digest);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -639,7 +653,6 @@ mod tests {
         image: String,
         running: bool,
         command: Option<Vec<String>>,
-        volumes: Vec<String>,
         restart_policy: Option<String>,
     }
 
@@ -649,7 +662,6 @@ mod tests {
                 image: "docker.io/library/nginx:latest".into(),
                 running: true,
                 command: None,
-                volumes: vec![],
                 restart_policy: Some("unless-stopped".into()),
             }
         }
@@ -660,7 +672,6 @@ mod tests {
             image: spec.image,
             running: spec.running,
             command: spec.command,
-            volumes: spec.volumes,
             restart_policy: spec.restart_policy,
         }
     }
@@ -728,13 +739,17 @@ mod tests {
     }
 
     #[test]
-    fn change_recreate_when_volumes_differ() {
+    fn change_none_when_volumes_differ() {
+        // Volume drift detection is deferred — see the `change()` Note about
+        // version-dependent normalisation in `.HostConfig.Binds`. A declared
+        // volume that doesn't match the running container should NOT trigger
+        // a recreate today; this lock-in test will fail when we re-enable
+        // drift detection so we remember to revisit it.
         let declared = resource(ResourceSpec {
             volumes: vec!["/srv/data:/data".into()],
             ..ResourceSpec::default()
         });
-        let change = Podman::change(&declared, &state(StateSpec::default())).expect("change");
-        assert!(matches!(change, PodmanChange::Recreate { .. }));
+        assert!(Podman::change(&declared, &state(StateSpec::default())).is_none());
     }
 
     #[test]
@@ -836,8 +851,41 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_digest_reference_unchanged() {
+    fn canonicalize_fully_qualified_digest_unchanged() {
         let digest = "docker.io/library/nginx@sha256:deadbeef";
         assert_eq!(canonicalize_image(digest), digest);
+    }
+
+    #[test]
+    fn canonicalize_bare_digest_adds_docker_hub() {
+        // The digest itself is unambiguous, but the name still needs the
+        // registry prefix so it matches the form `podman inspect` reports.
+        assert_eq!(
+            canonicalize_image("nginx@sha256:deadbeef"),
+            "docker.io/library/nginx@sha256:deadbeef"
+        );
+    }
+
+    #[test]
+    fn canonicalize_user_repo_digest_adds_docker_hub() {
+        assert_eq!(
+            canonicalize_image("bitnami/redis@sha256:deadbeef"),
+            "docker.io/bitnami/redis@sha256:deadbeef"
+        );
+    }
+
+    #[test]
+    fn change_none_when_bare_digest_matches_qualified_digest() {
+        // Locks in the digest-canonicalisation fix: a declared bare digest
+        // reference should match the qualified inspect output.
+        let declared = resource(ResourceSpec {
+            image: "nginx@sha256:deadbeef".into(),
+            ..ResourceSpec::default()
+        });
+        let current = state(StateSpec {
+            image: "docker.io/library/nginx@sha256:deadbeef".into(),
+            ..StateSpec::default()
+        });
+        assert!(Podman::change(&declared, &current).is_none());
     }
 }
