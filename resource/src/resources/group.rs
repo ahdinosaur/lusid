@@ -18,7 +18,7 @@ use crate::ResourceType;
 ///
 /// Tagged by `state: "present" | "absent"`. Mirrors the shape used by Salt
 /// (`group.present`) and Ansible (`ansible.builtin.group`), with an additional
-/// `members` field to declare supplementary group membership declaratively.
+/// `append_users` field to declaratively guarantee supplementary group membership.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum GroupParams {
@@ -26,11 +26,13 @@ pub enum GroupParams {
         name: String,
         gid: Option<u32>,
         system: Option<bool>,
-        /// Exact list of supplementary members. `None` means "leave membership
-        /// unmanaged"; `Some([])` means "ensure no supplementary members".
-        /// Users whose *primary* group is this one are unaffected — primary
-        /// membership is set on the `user` resource, not here.
-        members: Option<Vec<String>>,
+        /// Users that must belong to this group as supplementary members. Missing
+        /// users are added; users already in the group are left alone, and users
+        /// not listed here are *not* removed — this is append-only, not an exact
+        /// list. `None` or an empty list means "don't touch membership". Users
+        /// whose *primary* group is this one are unaffected — primary membership
+        /// is set on the `user` resource, not here.
+        append_users: Option<Vec<String>>,
     },
     Absent {
         name: String,
@@ -54,7 +56,7 @@ pub enum GroupResource {
         name: String,
         gid: Option<u32>,
         system: bool,
-        members: Option<Vec<String>>,
+        append_users: Option<Vec<String>>,
     },
     Absent {
         name: String,
@@ -115,16 +117,16 @@ pub enum GroupChange {
         name: String,
         gid: Option<u32>,
         system: bool,
-        /// Supplementary members to install after the group is created. Empty
-        /// means "no `gpasswd` step".
-        members: Vec<String>,
+        /// Users to append as supplementary members after the group is created.
+        /// Empty means "no `gpasswd` step".
+        append_users: Vec<String>,
     },
     Modify {
         name: String,
         gid: Option<u32>,
-        /// `None` means membership is unmanaged or already matches; `Some`
-        /// means "replace the current supplementary members with exactly this list".
-        members: Option<Vec<String>>,
+        /// Declared users that are not currently members and need to be appended.
+        /// Empty means membership is already fine.
+        append_users: Vec<String>,
     },
     Delete {
         name: String,
@@ -170,7 +172,7 @@ impl ResourceType for Group {
                     "name".to_string() => field(ParamType::String, true),
                     "gid".to_string() => field(ParamType::Number, false),
                     "system".to_string() => field(ParamType::Boolean, false),
-                    "members".to_string() => field(string_list(), false),
+                    "append_users".to_string() => field(string_list(), false),
                 },
                 indexmap! {
                     "state".to_string() => field(ParamType::Literal("absent".into()), true),
@@ -190,12 +192,12 @@ impl ResourceType for Group {
                 name,
                 gid,
                 system,
-                members,
+                append_users,
             } => GroupResource::Present {
                 name,
                 gid,
                 system: system.unwrap_or(false),
-                members,
+                append_users,
             },
             GroupParams::Absent { name } => GroupResource::Absent { name },
         };
@@ -238,14 +240,14 @@ impl ResourceType for Group {
                     name,
                     gid,
                     system,
-                    members,
+                    append_users,
                 },
                 GroupState::Absent,
             ) => Some(GroupChange::Create {
                 name: name.clone(),
                 gid: *gid,
                 system: *system,
-                members: members.clone().unwrap_or_default(),
+                append_users: append_users.clone().unwrap_or_default(),
             }),
 
             (
@@ -253,7 +255,7 @@ impl ResourceType for Group {
                     name,
                     gid,
                     system: _,
-                    members,
+                    append_users,
                 },
                 GroupState::Present {
                     gid: current_gid,
@@ -262,25 +264,29 @@ impl ResourceType for Group {
             ) => {
                 let gid_change = gid.filter(|declared| *declared != *current_gid);
 
-                let members_change = members.as_ref().and_then(|declared| {
-                    let current: BTreeSet<&str> =
-                        current_members.iter().map(String::as_str).collect();
-                    let declared_set: BTreeSet<&str> =
-                        declared.iter().map(String::as_str).collect();
-                    if declared_set == current {
-                        None
-                    } else {
-                        Some(declared.clone())
-                    }
-                });
+                let append_users_change: Vec<String> = append_users
+                    .as_ref()
+                    .map(|declared| {
+                        let current: BTreeSet<&str> =
+                            current_members.iter().map(String::as_str).collect();
+                        let mut seen: BTreeSet<&str> = BTreeSet::new();
+                        declared
+                            .iter()
+                            .filter(|user| {
+                                !current.contains(user.as_str()) && seen.insert(user.as_str())
+                            })
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
 
-                if gid_change.is_none() && members_change.is_none() {
+                if gid_change.is_none() && append_users_change.is_empty() {
                     None
                 } else {
                     Some(GroupChange::Modify {
                         name: name.clone(),
                         gid: gid_change,
-                        members: members_change,
+                        append_users: append_users_change,
                     })
                 }
             }
@@ -293,12 +299,12 @@ impl ResourceType for Group {
                 name,
                 gid,
                 system,
-                members,
+                append_users,
             } => {
                 let mut ops: Vec<CausalityTree<Operation>> = Vec::new();
-                let needs_set_members = !members.is_empty();
+                let needs_add_users = !append_users.is_empty();
 
-                let add_meta = if needs_set_members {
+                let add_meta = if needs_add_users {
                     CausalityMeta::id("add".into())
                 } else {
                     CausalityMeta::default()
@@ -312,26 +318,33 @@ impl ResourceType for Group {
                     }),
                 ));
 
-                if needs_set_members {
+                for user in append_users {
                     ops.push(CausalityTree::leaf(
                         CausalityMeta::requires(vec!["add".into()]),
-                        Operation::Group(GroupOperation::SetMembers { name, members }),
+                        Operation::Group(GroupOperation::AddUser {
+                            name: name.clone(),
+                            user,
+                        }),
                     ));
                 }
 
                 ops
             }
-            GroupChange::Modify { name, gid, members } => {
+            GroupChange::Modify {
+                name,
+                gid,
+                append_users,
+            } => {
                 let mut ops: Vec<CausalityTree<Operation>> = Vec::new();
                 let has_gid = gid.is_some();
-                let has_members = members.is_some();
+                let has_users = !append_users.is_empty();
 
                 if has_gid {
                     // Order groupmod before gpasswd when both are emitted: both edit
                     // /etc/group, and while shadow-utils serializes them via the
                     // password-file lock, making the dependency explicit keeps the
                     // plan correct regardless of intra-epoch scheduling.
-                    let meta = if has_members {
+                    let meta = if has_users {
                         CausalityMeta::id("modify".into())
                     } else {
                         CausalityMeta::default()
@@ -344,7 +357,7 @@ impl ResourceType for Group {
                         }),
                     ));
                 }
-                if let Some(members) = members {
+                for user in append_users {
                     let meta = if has_gid {
                         CausalityMeta::requires(vec!["modify".into()])
                     } else {
@@ -352,7 +365,10 @@ impl ResourceType for Group {
                     };
                     ops.push(CausalityTree::leaf(
                         meta,
-                        Operation::Group(GroupOperation::SetMembers { name, members }),
+                        Operation::Group(GroupOperation::AddUser {
+                            name: name.clone(),
+                            user,
+                        }),
                     ));
                 }
                 ops

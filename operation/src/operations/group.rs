@@ -20,15 +20,14 @@ pub enum GroupOperation {
         name: String,
         gid: Option<u32>,
     },
-    /// Replace the group's supplementary member list with exactly `members`.
+    /// Append a single user as a supplementary member of `name`.
     ///
-    /// Uses `gpasswd -M`, which overrides the list atomically; users in `members`
-    /// not already in the group are added, and members not in `members` are
-    /// removed. Users whose *primary* group is this one (set via `/etc/passwd`)
-    /// are unaffected — `gpasswd` only edits `/etc/group`.
-    SetMembers {
+    /// Uses `gpasswd -a`, which appends without touching other members. Users
+    /// whose *primary* group is this one (set via `/etc/passwd`) are unaffected
+    /// — `gpasswd` only edits `/etc/group`.
+    AddUser {
         name: String,
-        members: Vec<String>,
+        user: String,
     },
     Delete {
         name: String,
@@ -40,11 +39,9 @@ impl Display for GroupOperation {
         match self {
             GroupOperation::Add { name, .. } => write!(f, "Group::Add(name = {name})"),
             GroupOperation::Modify { name, .. } => write!(f, "Group::Modify(name = {name})"),
-            GroupOperation::SetMembers { name, members } => write!(
-                f,
-                "Group::SetMembers(name = {name}, members = [{}])",
-                members.join(", ")
-            ),
+            GroupOperation::AddUser { name, user } => {
+                write!(f, "Group::AddUser(name = {name}, user = {user})")
+            }
             GroupOperation::Delete { name } => write!(f, "Group::Delete(name = {name})"),
         }
     }
@@ -66,7 +63,7 @@ impl OperationType for Group {
     type Operation = GroupOperation;
 
     // Note(cc): group operations mutate a single named group per call. As with
-    // `UserOperation::merge`, ordering of add/modify/delete/set-members for the
+    // `UserOperation::merge`, ordering of add/modify/delete/add-user for the
     // same name would need to be preserved; not worth coalescing.
     fn merge(operations: Vec<Self::Operation>) -> Vec<Self::Operation> {
         operations
@@ -119,10 +116,10 @@ impl OperationType for Group {
                     output.stderr,
                 ))
             }
-            GroupOperation::SetMembers { name, members } => {
-                info!("[group] set members: {} = [{}]", name, members.join(", "));
+            GroupOperation::AddUser { name, user } => {
+                info!("[group] add user: {} <- {}", name, user);
                 let mut cmd = Command::new("gpasswd");
-                cmd.arg("-M").arg(members.join(",")).arg("--").arg(name);
+                cmd.arg("-a").arg(user).arg("--").arg(name);
                 let output = cmd.sudo().output().await?;
                 Ok((
                     Box::pin(async move {
