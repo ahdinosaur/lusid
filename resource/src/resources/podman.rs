@@ -1,15 +1,21 @@
+use std::collections::BTreeMap;
 use std::fmt::Display;
+use std::fmt::Write;
 
 use async_trait::async_trait;
 use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
-use lusid_operation::{Operation, operations::podman::PodmanOperation};
+use lusid_operation::{
+    Operation,
+    operations::podman::{CONFIG_HASH_LABEL, PodmanOperation},
+};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -19,15 +25,6 @@ use crate::ResourceType;
 /// Tagged by `state: "present" | "absent"`. Mirrors the shape of Ansible's
 /// `containers.podman.podman_container` at a conservative subset — enough to
 /// declare a long-running container without wrapping every podman flag.
-// TODO(cc): spec-drift detection covers `image` (canonicalised), `command`,
-// and `restart_policy`. Changes to `env`, `ports`, or `volumes` will NOT yet
-// trigger a recreate — `.Config.Env` mixes user values with image defaults
-// (requires a subset check or a label written at create time);
-// `.HostConfig.PortBindings` is a map that doesn't round-trip cleanly from
-// the user's "HOST:CONTAINER[/proto]" strings; and `.HostConfig.Binds` may
-// be normalised by podman (e.g. SELinux relabel flags) in version-dependent
-// ways, so a naive string compare causes false-positive recreates. See
-// `change()` for detail.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum PodmanParams {
@@ -99,11 +96,13 @@ impl_display_render!(PodmanResource);
 pub enum PodmanState {
     Absent,
     Present {
-        /// Canonicalized image reference (e.g. `docker.io/library/nginx:latest`).
+        /// Image reference reported by `podman inspect`. Informational only —
+        /// drift detection uses [`config_hash`] below.
         image: String,
         running: bool,
-        command: Option<Vec<String>>,
-        restart_policy: Option<String>,
+        /// Value of the `lusid.config-hash` label on the running container,
+        /// or `None` if the label is missing. `None` is treated as drift.
+        config_hash: Option<String>,
     },
 }
 
@@ -136,9 +135,12 @@ pub enum PodmanStateError {
     InspectEmpty,
 }
 
-/// Subset of `podman container inspect` JSON we care about for drift detection.
-/// Fields we don't compare today (Env, PortBindings) are omitted — see
-/// `change()` for the rationale.
+/// Subset of `podman container inspect` JSON we care about. We deliberately
+/// avoid pulling fields that podman normalises in version-dependent ways
+/// (`.Config.Env` mixes user values with image defaults, `.HostConfig.Binds`
+/// can rewrite SELinux flags, `.HostConfig.PortBindings` is a different
+/// shape than the user's port strings) — drift over those fields is detected
+/// via the [`CONFIG_HASH_LABEL`] instead.
 #[derive(Debug, Clone, Deserialize)]
 struct InspectContainer {
     #[serde(rename = "ImageName", default)]
@@ -147,29 +149,14 @@ struct InspectContainer {
     #[serde(rename = "Config", default)]
     config: InspectConfig,
 
-    #[serde(rename = "HostConfig", default)]
-    host_config: InspectHostConfig,
-
     #[serde(rename = "State", default)]
     state: InspectState,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct InspectConfig {
-    #[serde(rename = "Cmd", default)]
-    cmd: Option<Vec<String>>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct InspectHostConfig {
-    #[serde(rename = "RestartPolicy", default)]
-    restart_policy: InspectRestartPolicy,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct InspectRestartPolicy {
-    #[serde(rename = "Name", default)]
-    name: String,
+    #[serde(rename = "Labels", default)]
+    labels: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -191,11 +178,11 @@ pub enum PodmanChange {
         restart_policy: Option<String>,
         start: bool,
     },
-    /// Container exists with the right image, but needs to be started.
+    /// Container exists with the right config, but needs to be started.
     Start { name: String },
-    /// Container exists with the right image, but needs to be stopped.
+    /// Container exists with the right config, but needs to be stopped.
     Stop { name: String },
-    /// Container exists but its image no longer matches; remove and recreate.
+    /// Container exists but its config hash no longer matches; remove and recreate.
     Recreate {
         name: String,
         image: String,
@@ -335,22 +322,12 @@ impl ResourceType for Podman {
             .next()
             .ok_or(PodmanStateError::InspectEmpty)?;
 
-        let restart_policy = {
-            let name = container.host_config.restart_policy.name;
-            // podman reports "" or "no" when no policy is set; normalise both to None
-            // so drift detection doesn't flap on the default.
-            if name.is_empty() || name == "no" {
-                None
-            } else {
-                Some(name)
-            }
-        };
+        let config_hash = container.config.labels.get(CONFIG_HASH_LABEL).cloned();
 
         Ok(PodmanState::Present {
-            image: canonicalize_image(&container.image_name),
+            image: container.image_name,
             running: container.state.running,
-            command: container.config.cmd,
-            restart_policy,
+            config_hash,
         })
     }
 
@@ -399,32 +376,28 @@ impl ResourceType for Podman {
                     running,
                 },
                 PodmanState::Present {
-                    image: current_image,
                     running: current_running,
-                    command: current_command,
-                    restart_policy: current_restart_policy,
+                    config_hash: current_config_hash,
+                    ..
                 },
             ) => {
-                // Note(cc): env, ports, and volumes are deliberately not compared
-                // here. `.Config.Env` includes image defaults plus things like
-                // PATH, so a raw compare against the user's declared env would
-                // always drift; detecting it properly needs either a subset check
-                // or a label written at create time. `.HostConfig.PortBindings`
-                // is a map<container/proto, [{HostIp, HostPort}]>, and
-                // round-tripping the user's "HOST:CONTAINER[/proto]" strings
-                // through that shape isn't trivial. `.HostConfig.Binds` may be
-                // normalised by podman in version-dependent ways (e.g. SELinux
-                // relabel flags), so a naive string compare causes false-positive
-                // recreates. All three are left as follow-ups.
-                let declared_image = canonicalize_image(image);
-                let command_drift = command
-                    .as_ref()
-                    .is_some_and(|declared| Some(declared) != current_command.as_ref());
-                let restart_drift = restart_policy
-                    .as_ref()
-                    .is_some_and(|declared| Some(declared) != current_restart_policy.as_ref());
+                // The hash is the single source of truth for "did the spec
+                // change?". Comparing it (instead of the inspect output's
+                // image / env / port / volume / cmd / restart fields) sidesteps
+                // podman's version-dependent normalisation of those fields.
+                // A missing label is also treated as drift so older or foreign
+                // containers get adopted-by-recreate, which installs the label.
+                let declared_hash = config_hash(
+                    image,
+                    command.as_ref(),
+                    env,
+                    ports,
+                    volumes,
+                    restart_policy.as_ref(),
+                );
+                let hash_matches = current_config_hash.as_deref() == Some(declared_hash.as_str());
 
-                if declared_image != *current_image || command_drift || restart_drift {
+                if !hash_matches {
                     Some(PodmanChange::Recreate {
                         name: name.clone(),
                         image: image.clone(),
@@ -530,6 +503,15 @@ fn create_ops(
         ));
     }
 
+    let hash = config_hash(
+        &image,
+        command.as_ref(),
+        &env,
+        &ports,
+        &volumes,
+        restart_policy.as_ref(),
+    );
+
     let create_meta = CausalityMeta {
         id: Some("create".into()),
         requires: remove_id.map(|id| vec![id.into()]).unwrap_or_default(),
@@ -545,6 +527,7 @@ fn create_ops(
             ports,
             volumes,
             restart_policy,
+            config_hash: hash,
         }),
     ));
 
@@ -558,11 +541,65 @@ fn create_ops(
     ops
 }
 
+/// Compute the SHA-256 of the canonical representation of a container's
+/// declared spec. Stored as the [`CONFIG_HASH_LABEL`] value at create time
+/// and compared against on every state observation to detect drift.
+///
+/// Inputs are taken in canonical form so that logically-equivalent
+/// declarations (e.g. `nginx:latest` vs `docker.io/library/nginx:latest`)
+/// produce the same hash. Field order is preserved within each list — for
+/// `env` in particular, `KEY=a` then `KEY=b` is meaningfully different from
+/// the reverse (last-write-wins under `podman create -e`), so reordering
+/// should be drift.
+///
+/// `running` is intentionally excluded: it's a runtime state that can flip
+/// without a recreate, handled by Start/Stop in [`Podman::change`].
+fn config_hash(
+    image: &str,
+    command: Option<&Vec<String>>,
+    env: &[String],
+    ports: &[String],
+    volumes: &[String],
+    restart_policy: Option<&String>,
+) -> String {
+    /// Stable, declaration-ordered serialisation target for hashing. Adding,
+    /// removing, or reordering a field changes the hash for every existing
+    /// container — that is, every container will be recreated once on the
+    /// next apply. Treat this as a versioned wire format.
+    #[derive(Serialize)]
+    struct ConfigForHash<'a> {
+        image: &'a str,
+        command: Option<&'a Vec<String>>,
+        env: &'a [String],
+        ports: &'a [String],
+        volumes: &'a [String],
+        restart_policy: Option<&'a String>,
+    }
+
+    let canonical_image = canonicalize_image(image);
+    let cfg = ConfigForHash {
+        image: &canonical_image,
+        command,
+        env,
+        ports,
+        volumes,
+        restart_policy,
+    };
+    // Serialising a fixed-shape struct of owned-string-like fields cannot fail.
+    let bytes = serde_json::to_vec(&cfg).expect("ConfigForHash serialisation is infallible");
+
+    let digest = Sha256::digest(&bytes);
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
 /// Best-effort canonicalisation of a container image reference to the form
 /// that `podman inspect` typically reports (`<registry>/<repo>:<tag>` or
-/// `<registry>/<repo>@<digest>`), so that short forms like `nginx:latest` or
-/// `nginx@sha256:…` compare equal to their fully-qualified inspect output
-/// when deciding if the current container matches the declared spec.
+/// `<registry>/<repo>@<digest>`). Used to keep [`config_hash`] stable across
+/// short and fully-qualified declarations of the same image.
 fn canonicalize_image(reference: &str) -> String {
     // Split off a digest if present. The digest itself is already unambiguous,
     // but the name preceding it still needs the same registry/repo prefixing
@@ -619,6 +656,8 @@ mod tests {
     struct ResourceSpec {
         image: String,
         command: Option<Vec<String>>,
+        env: Vec<String>,
+        ports: Vec<String>,
         volumes: Vec<String>,
         restart_policy: Option<String>,
         running: bool,
@@ -629,6 +668,8 @@ mod tests {
             Self {
                 image: "docker.io/library/nginx:latest".into(),
                 command: None,
+                env: vec![],
+                ports: vec!["8080:80".into()],
                 volumes: vec![],
                 restart_policy: Some("unless-stopped".into()),
                 running: true,
@@ -641,50 +682,36 @@ mod tests {
             name: "web".into(),
             image: spec.image,
             command: spec.command,
-            env: vec![],
-            ports: vec!["8080:80".into()],
+            env: spec.env,
+            ports: spec.ports,
             volumes: spec.volumes,
             restart_policy: spec.restart_policy,
             running: spec.running,
         }
     }
 
-    struct StateSpec {
-        image: String,
-        running: bool,
-        command: Option<Vec<String>>,
-        restart_policy: Option<String>,
-    }
-
-    impl Default for StateSpec {
-        fn default() -> Self {
-            Self {
-                image: "docker.io/library/nginx:latest".into(),
-                running: true,
-                command: None,
-                restart_policy: Some("unless-stopped".into()),
-            }
-        }
-    }
-
-    fn state(spec: StateSpec) -> PodmanState {
+    /// Build a state matching `spec`'s declared config — i.e. the label hash
+    /// is computed from the same inputs. Use this for "no drift" tests.
+    fn state_matching(spec: &ResourceSpec) -> PodmanState {
         PodmanState::Present {
-            image: spec.image,
+            image: canonicalize_image(&spec.image),
             running: spec.running,
-            command: spec.command,
-            restart_policy: spec.restart_policy,
+            config_hash: Some(config_hash(
+                &spec.image,
+                spec.command.as_ref(),
+                &spec.env,
+                &spec.ports,
+                &spec.volumes,
+                spec.restart_policy.as_ref(),
+            )),
         }
     }
 
     #[test]
-    fn change_none_when_matches() {
-        assert!(
-            Podman::change(
-                &resource(ResourceSpec::default()),
-                &state(StateSpec::default())
-            )
-            .is_none()
-        );
+    fn change_none_when_hash_matches() {
+        let spec = ResourceSpec::default();
+        let state = state_matching(&spec);
+        assert!(Podman::change(&resource(spec), &state).is_none());
     }
 
     #[test]
@@ -696,111 +723,167 @@ mod tests {
 
     #[test]
     fn change_recreate_when_image_differs() {
-        let current = state(StateSpec {
-            image: "docker.io/library/nginx:1.25".into(),
-            ..StateSpec::default()
-        });
-        let change = Podman::change(&resource(ResourceSpec::default()), &current).expect("change");
+        let spec = ResourceSpec::default();
+        let mut other = ResourceSpec::default();
+        other.image = "docker.io/library/nginx:1.25".into();
+        let current = state_matching(&other);
+        let change = Podman::change(&resource(spec), &current).expect("change");
         assert!(matches!(change, PodmanChange::Recreate { .. }));
     }
 
     #[test]
-    fn change_none_when_image_ref_matches_after_canonicalisation() {
-        // Declared short form should match the fully-qualified inspect output.
-        let declared = resource(ResourceSpec {
+    fn change_none_when_image_short_form_matches_qualified() {
+        // Declared short form should hash the same as its fully-qualified form.
+        let qualified = ResourceSpec::default();
+        let short = ResourceSpec {
             image: "nginx:latest".into(),
             ..ResourceSpec::default()
-        });
-        assert!(Podman::change(&declared, &state(StateSpec::default())).is_none());
+        };
+        let current = state_matching(&qualified);
+        assert!(Podman::change(&resource(short), &current).is_none());
     }
 
     #[test]
     fn change_recreate_when_command_differs() {
-        let declared = resource(ResourceSpec {
+        let declared = ResourceSpec {
             command: Some(vec!["nginx".into(), "-g".into(), "daemon off;".into()]),
             ..ResourceSpec::default()
-        });
-        let current = state(StateSpec {
+        };
+        let current = state_matching(&ResourceSpec {
             command: Some(vec!["nginx".into()]),
-            ..StateSpec::default()
+            ..ResourceSpec::default()
         });
-        let change = Podman::change(&declared, &current).expect("change");
+        let change = Podman::change(&resource(declared), &current).expect("change");
         assert!(matches!(change, PodmanChange::Recreate { .. }));
     }
 
     #[test]
     fn change_recreate_when_restart_policy_differs() {
-        let current = state(StateSpec {
+        let declared = ResourceSpec::default();
+        let current = state_matching(&ResourceSpec {
             restart_policy: Some("always".into()),
-            ..StateSpec::default()
+            ..ResourceSpec::default()
         });
+        let change = Podman::change(&resource(declared), &current).expect("change");
+        assert!(matches!(change, PodmanChange::Recreate { .. }));
+    }
+
+    #[test]
+    fn change_recreate_when_env_differs() {
+        let declared = ResourceSpec {
+            env: vec!["FOO=bar".into()],
+            ..ResourceSpec::default()
+        };
+        let current = state_matching(&ResourceSpec {
+            env: vec!["FOO=baz".into()],
+            ..ResourceSpec::default()
+        });
+        let change = Podman::change(&resource(declared), &current).expect("change");
+        assert!(matches!(change, PodmanChange::Recreate { .. }));
+    }
+
+    #[test]
+    fn change_recreate_when_ports_differ() {
+        let declared = ResourceSpec {
+            ports: vec!["8080:80".into()],
+            ..ResourceSpec::default()
+        };
+        let current = state_matching(&ResourceSpec {
+            ports: vec!["9090:80".into()],
+            ..ResourceSpec::default()
+        });
+        let change = Podman::change(&resource(declared), &current).expect("change");
+        assert!(matches!(change, PodmanChange::Recreate { .. }));
+    }
+
+    #[test]
+    fn change_recreate_when_volumes_differ() {
+        let declared = ResourceSpec {
+            volumes: vec!["/srv/data:/data".into()],
+            ..ResourceSpec::default()
+        };
+        let current = state_matching(&ResourceSpec::default());
+        let change = Podman::change(&resource(declared), &current).expect("change");
+        assert!(matches!(change, PodmanChange::Recreate { .. }));
+    }
+
+    #[test]
+    fn change_recreate_when_env_order_differs() {
+        // Order matters for env (last-write-wins under podman -e KEY=...);
+        // reordering the user's declared list is treated as drift.
+        let declared = ResourceSpec {
+            env: vec!["A=1".into(), "B=2".into()],
+            ..ResourceSpec::default()
+        };
+        let current = state_matching(&ResourceSpec {
+            env: vec!["B=2".into(), "A=1".into()],
+            ..ResourceSpec::default()
+        });
+        let change = Podman::change(&resource(declared), &current).expect("change");
+        assert!(matches!(change, PodmanChange::Recreate { .. }));
+    }
+
+    #[test]
+    fn change_recreate_when_label_missing() {
+        // A container without our label is either pre-hash (older lusid) or
+        // foreign. Recreate so the label is installed and we own state going
+        // forward.
+        let current = PodmanState::Present {
+            image: "docker.io/library/nginx:latest".into(),
+            running: true,
+            config_hash: None,
+        };
         let change = Podman::change(&resource(ResourceSpec::default()), &current).expect("change");
         assert!(matches!(change, PodmanChange::Recreate { .. }));
     }
 
     #[test]
-    fn change_none_when_volumes_differ() {
-        // Volume drift detection is deferred — see the `change()` Note about
-        // version-dependent normalisation in `.HostConfig.Binds`. A declared
-        // volume that doesn't match the running container should NOT trigger
-        // a recreate today; this lock-in test will fail when we re-enable
-        // drift detection so we remember to revisit it.
-        let declared = resource(ResourceSpec {
-            volumes: vec!["/srv/data:/data".into()],
-            ..ResourceSpec::default()
-        });
-        assert!(Podman::change(&declared, &state(StateSpec::default())).is_none());
-    }
-
-    #[test]
-    fn change_none_when_undeclared_command_ignored() {
-        // User didn't declare a command; inspect reports the image's default.
-        // That's not drift — the declaration never constrained it.
-        let current = state(StateSpec {
-            command: Some(vec!["nginx".into(), "-g".into(), "daemon off;".into()]),
-            ..StateSpec::default()
-        });
-        assert!(Podman::change(&resource(ResourceSpec::default()), &current).is_none());
-    }
-
-    #[test]
-    fn change_none_when_undeclared_restart_policy_ignored() {
-        // User didn't declare a restart policy; a container-side default isn't drift.
-        let declared = resource(ResourceSpec {
-            restart_policy: None,
-            ..ResourceSpec::default()
-        });
-        let current = state(StateSpec {
-            restart_policy: Some("always".into()),
-            ..StateSpec::default()
-        });
-        assert!(Podman::change(&declared, &current).is_none());
-    }
-
-    #[test]
     fn change_start_when_only_running_differs() {
-        let current = state(StateSpec {
+        let spec = ResourceSpec::default();
+        let current = PodmanState::Present {
+            image: canonicalize_image(&spec.image),
             running: false,
-            ..StateSpec::default()
-        });
-        let change = Podman::change(&resource(ResourceSpec::default()), &current).expect("change");
+            config_hash: Some(config_hash(
+                &spec.image,
+                spec.command.as_ref(),
+                &spec.env,
+                &spec.ports,
+                &spec.volumes,
+                spec.restart_policy.as_ref(),
+            )),
+        };
+        let change = Podman::change(&resource(spec), &current).expect("change");
         assert!(matches!(change, PodmanChange::Start { .. }));
     }
 
     #[test]
     fn change_stop_when_declared_not_running() {
-        let declared = resource(ResourceSpec {
+        let declared = ResourceSpec {
             running: false,
             ..ResourceSpec::default()
-        });
-        let change = Podman::change(&declared, &state(StateSpec::default())).expect("change");
+        };
+        // The state's hash must be computed against the same logical config
+        // (running isn't part of the hash, so this is fine).
+        let current = state_matching(&declared);
+        let current = match current {
+            PodmanState::Present {
+                image, config_hash, ..
+            } => PodmanState::Present {
+                image,
+                running: true,
+                config_hash,
+            },
+            PodmanState::Absent => unreachable!(),
+        };
+        let change = Podman::change(&resource(declared), &current).expect("change");
         assert!(matches!(change, PodmanChange::Stop { .. }));
     }
 
     #[test]
     fn change_remove_when_declared_absent_but_present() {
         let declared = PodmanResource::Absent { name: "web".into() };
-        let change = Podman::change(&declared, &state(StateSpec::default())).expect("change");
+        let current = state_matching(&ResourceSpec::default());
+        let change = Podman::change(&declared, &current).expect("change");
         assert!(matches!(change, PodmanChange::Remove { .. }));
     }
 
@@ -808,6 +891,97 @@ mod tests {
     fn change_none_when_absent_matches() {
         let declared = PodmanResource::Absent { name: "web".into() };
         assert!(Podman::change(&declared, &PodmanState::Absent).is_none());
+    }
+
+    #[test]
+    fn config_hash_is_stable_for_equivalent_image_refs() {
+        let a = config_hash("nginx", None, &[], &[], &[], None);
+        let b = config_hash("docker.io/library/nginx:latest", None, &[], &[], &[], None);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn config_hash_changes_when_any_input_changes() {
+        let base = config_hash(
+            "nginx",
+            Some(&vec!["sh".into()]),
+            &["A=1".into()],
+            &["80:80".into()],
+            &["/x:/x".into()],
+            Some(&"always".into()),
+        );
+
+        // Each variation should produce a distinct hash. We don't assert exact
+        // values — just that no two collide and none equals the base.
+        let variants: Vec<String> = vec![
+            config_hash(
+                "nginx:1.25",
+                Some(&vec!["sh".into()]),
+                &["A=1".into()],
+                &["80:80".into()],
+                &["/x:/x".into()],
+                Some(&"always".into()),
+            ),
+            config_hash(
+                "nginx",
+                Some(&vec!["bash".into()]),
+                &["A=1".into()],
+                &["80:80".into()],
+                &["/x:/x".into()],
+                Some(&"always".into()),
+            ),
+            config_hash(
+                "nginx",
+                Some(&vec!["sh".into()]),
+                &["A=2".into()],
+                &["80:80".into()],
+                &["/x:/x".into()],
+                Some(&"always".into()),
+            ),
+            config_hash(
+                "nginx",
+                Some(&vec!["sh".into()]),
+                &["A=1".into()],
+                &["81:80".into()],
+                &["/x:/x".into()],
+                Some(&"always".into()),
+            ),
+            config_hash(
+                "nginx",
+                Some(&vec!["sh".into()]),
+                &["A=1".into()],
+                &["80:80".into()],
+                &["/y:/y".into()],
+                Some(&"always".into()),
+            ),
+            config_hash(
+                "nginx",
+                Some(&vec!["sh".into()]),
+                &["A=1".into()],
+                &["80:80".into()],
+                &["/x:/x".into()],
+                Some(&"unless-stopped".into()),
+            ),
+            config_hash(
+                "nginx",
+                None,
+                &["A=1".into()],
+                &["80:80".into()],
+                &["/x:/x".into()],
+                Some(&"always".into()),
+            ),
+            config_hash(
+                "nginx",
+                Some(&vec!["sh".into()]),
+                &["A=1".into()],
+                &["80:80".into()],
+                &["/x:/x".into()],
+                None,
+            ),
+        ];
+        for v in &variants {
+            assert_ne!(*v, base, "variant collided with base: {v}");
+        }
     }
 
     #[test]
@@ -872,20 +1046,5 @@ mod tests {
             canonicalize_image("bitnami/redis@sha256:deadbeef"),
             "docker.io/bitnami/redis@sha256:deadbeef"
         );
-    }
-
-    #[test]
-    fn change_none_when_bare_digest_matches_qualified_digest() {
-        // Locks in the digest-canonicalisation fix: a declared bare digest
-        // reference should match the qualified inspect output.
-        let declared = resource(ResourceSpec {
-            image: "nginx@sha256:deadbeef".into(),
-            ..ResourceSpec::default()
-        });
-        let current = state(StateSpec {
-            image: "docker.io/library/nginx@sha256:deadbeef".into(),
-            ..StateSpec::default()
-        });
-        assert!(Podman::change(&declared, &current).is_none());
     }
 }

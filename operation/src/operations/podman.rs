@@ -9,11 +9,21 @@ use tracing::info;
 
 use crate::OperationType;
 
+/// Label key written on every container lusid creates. Its value is the
+/// resource layer's `config_hash` of the declared spec, used by drift
+/// detection on the next plan to tell "still matches" from "needs recreate".
+/// Kept in this crate so the create command and the resource-side reader
+/// can't disagree — change the key in one place.
+pub const CONFIG_HASH_LABEL: &str = "lusid.config-hash";
+
 #[derive(Debug, Clone)]
 pub enum PodmanOperation {
     /// Create a container from `image` under `name`. `--pull=missing` is used
     /// so the image is fetched inline when it isn't already present locally —
     /// keeps the operation set small without exposing a separate Pull op.
+    /// `config_hash` is written as the [`CONFIG_HASH_LABEL`] label so the
+    /// next state observation can detect drift without re-deriving fields
+    /// from podman's normalised inspect output.
     Create {
         name: String,
         image: String,
@@ -22,6 +32,7 @@ pub enum PodmanOperation {
         ports: Vec<String>,
         volumes: Vec<String>,
         restart_policy: Option<String>,
+        config_hash: String,
     },
     Start {
         name: String,
@@ -91,13 +102,16 @@ impl OperationType for Podman {
                 ports,
                 volumes,
                 restart_policy,
+                config_hash,
             } => {
                 info!("[podman] create: {} from {}", name, image);
                 let mut cmd = Command::new("podman");
                 cmd.arg("create")
                     .arg("--pull=missing")
                     .arg("--name")
-                    .arg(name);
+                    .arg(name)
+                    .arg("--label")
+                    .arg(format!("{CONFIG_HASH_LABEL}={config_hash}"));
                 if let Some(policy) = restart_policy {
                     cmd.arg("--restart").arg(policy);
                 }
