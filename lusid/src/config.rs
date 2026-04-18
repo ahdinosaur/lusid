@@ -5,9 +5,9 @@
 
 use comfy_table::Table;
 use lusid_machine::Machine;
-use lusid_system::Hostname;
+use lusid_system::{Arch, Hostname, OsKind};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -26,6 +26,9 @@ pub enum ConfigError {
 
     #[error("machine id not found: {machine_id}")]
     MachineIdNotFound { machine_id: String },
+
+    #[error("no lusid-apply binary configured for {os}/{arch}")]
+    MissingApplyPath { os: OsKind, arch: Arch },
 
     #[error("failed to get hostname: {0}")]
     GetHostname(#[source] io::Error),
@@ -58,18 +61,21 @@ struct ConfigToml {
     pub log: Option<String>,
     pub lusid_apply_linux_x86_64_path: Option<String>,
     pub lusid_apply_linux_aarch64_path: Option<String>,
+    pub lusid_apply_macos_x86_64_path: Option<String>,
+    pub lusid_apply_macos_aarch64_path: Option<String>,
 }
 
 /// Resolved configuration. `path` is the original config file location
 /// (used to derive `root()`, the plan-resolution base). `machines` map is
-/// keyed by the TOML section name.
+/// keyed by the TOML section name. `apply_paths` maps each supported target
+/// `(OsKind, Arch)` to the `lusid-apply` binary to use when applying to it —
+/// looked up via [`Config::apply_path`].
 #[derive(Debug, Clone)]
 pub struct Config {
     pub path: PathBuf,
     pub machines: BTreeMap<String, MachineConfig>,
     pub log: String,
-    pub lusid_apply_linux_x86_64_path: String,
-    pub lusid_apply_linux_aarch64_path: String,
+    pub apply_paths: HashMap<(OsKind, Arch), String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -98,30 +104,68 @@ impl Config {
             log,
             lusid_apply_linux_x86_64_path,
             lusid_apply_linux_aarch64_path,
+            lusid_apply_macos_x86_64_path,
+            lusid_apply_macos_aarch64_path,
         } = config;
 
         let machines = Self::resolve_machines(machines, path)?;
 
         let log = cli.log.clone().or(log).unwrap_or("error".into());
 
-        let lusid_apply_linux_x86_64_path = cli
-            .lusid_apply_linux_x86_64_path
-            .clone()
-            .or(lusid_apply_linux_x86_64_path.clone())
-            .unwrap_or("lusid-apply-linux-x86-64".into());
-        let lusid_apply_linux_aarch64_path = cli
-            .lusid_apply_linux_aarch64_path
-            .clone()
-            .or(lusid_apply_linux_aarch64_path.clone())
-            .unwrap_or("lusid-apply-linux-aarch64".into());
+        // Resolution per key: CLI flag → lusid.toml → default (`lusid-apply-<os>-<arch>`
+        // resolved via PATH at spawn time). Keeping the defaults populated for all
+        // known platforms means a user who just has the binaries on PATH doesn't need
+        // any config at all.
+        let apply_paths: HashMap<(OsKind, Arch), String> = [
+            (
+                (OsKind::Linux, Arch::X86_64),
+                cli.lusid_apply_linux_x86_64_path
+                    .clone()
+                    .or(lusid_apply_linux_x86_64_path)
+                    .unwrap_or_else(|| "lusid-apply-linux-x86-64".into()),
+            ),
+            (
+                (OsKind::Linux, Arch::Aarch64),
+                cli.lusid_apply_linux_aarch64_path
+                    .clone()
+                    .or(lusid_apply_linux_aarch64_path)
+                    .unwrap_or_else(|| "lusid-apply-linux-aarch64".into()),
+            ),
+            (
+                (OsKind::MacOS, Arch::X86_64),
+                cli.lusid_apply_macos_x86_64_path
+                    .clone()
+                    .or(lusid_apply_macos_x86_64_path)
+                    .unwrap_or_else(|| "lusid-apply-macos-x86-64".into()),
+            ),
+            (
+                (OsKind::MacOS, Arch::Aarch64),
+                cli.lusid_apply_macos_aarch64_path
+                    .clone()
+                    .or(lusid_apply_macos_aarch64_path)
+                    .unwrap_or_else(|| "lusid-apply-macos-aarch64".into()),
+            ),
+        ]
+        .into_iter()
+        .collect();
 
         Ok(Config {
             path: path.to_owned(),
             machines,
             log,
-            lusid_apply_linux_x86_64_path,
-            lusid_apply_linux_aarch64_path,
+            apply_paths,
         })
+    }
+
+    /// Look up the `lusid-apply` binary for a target `(os, arch)` pair.
+    ///
+    /// Returns the path (or plain binary name — callers pass through `Command::new`
+    /// or `which`, both of which consult `PATH`).
+    pub fn apply_path(&self, os: OsKind, arch: Arch) -> Result<&str, ConfigError> {
+        self.apply_paths
+            .get(&(os, arch))
+            .map(|s| s.as_str())
+            .ok_or(ConfigError::MissingApplyPath { os, arch })
     }
 
     pub fn get_machine(&self, machine_id: &str) -> Result<MachineConfig, ConfigError> {

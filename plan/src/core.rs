@@ -8,7 +8,8 @@ use lusid_resource::{
     directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, systemd::Systemd,
     user::User,
 };
-use rimu::{Spanned, Value};
+use lusid_system::System;
+use rimu::{Span, Spanned, Value};
 
 use crate::PlanItemToResourceError;
 
@@ -19,24 +20,36 @@ pub fn is_core_module(module: &Spanned<String>) -> Option<&str> {
 }
 
 /// Validate & deserialise `params` against the matching core module's schema, returning
-/// the wrapped [`ResourceParams`] variant. Errors if `id` is unknown.
+/// the wrapped [`ResourceParams`] variant. Errors if `id` is unknown, or if the resource
+/// is not supported on the host OS (`module_span` points at the offending `@core/<id>`
+/// reference for diagnostics).
 pub fn core_module(
     core_module_id: &str,
+    module_span: Span,
     params: Option<Spanned<Value>>,
+    system: &System,
 ) -> Result<ResourceParams, PlanItemToResourceError> {
     match core_module_id {
-        Apt::ID => core_module_for_resource::<Apt>(params).map(ResourceParams::Apt),
-        AptRepo::ID => core_module_for_resource::<AptRepo>(params).map(ResourceParams::AptRepo),
-        File::ID => core_module_for_resource::<File>(params).map(ResourceParams::File),
-        Directory::ID => {
-            core_module_for_resource::<Directory>(params).map(ResourceParams::Directory)
-        }
-        Pacman::ID => core_module_for_resource::<Pacman>(params).map(ResourceParams::Pacman),
-        Command::ID => core_module_for_resource::<Command>(params).map(ResourceParams::Command),
-        Git::ID => core_module_for_resource::<Git>(params).map(ResourceParams::Git),
-        Systemd::ID => core_module_for_resource::<Systemd>(params).map(ResourceParams::Systemd),
-        User::ID => core_module_for_resource::<User>(params).map(ResourceParams::User),
-        Group::ID => core_module_for_resource::<Group>(params).map(ResourceParams::Group),
+        Apt::ID => core_module_for_resource::<Apt>(module_span, params, system)
+            .map(ResourceParams::Apt),
+        AptRepo::ID => core_module_for_resource::<AptRepo>(module_span, params, system)
+            .map(ResourceParams::AptRepo),
+        File::ID => core_module_for_resource::<File>(module_span, params, system)
+            .map(ResourceParams::File),
+        Directory::ID => core_module_for_resource::<Directory>(module_span, params, system)
+            .map(ResourceParams::Directory),
+        Pacman::ID => core_module_for_resource::<Pacman>(module_span, params, system)
+            .map(ResourceParams::Pacman),
+        Command::ID => core_module_for_resource::<Command>(module_span, params, system)
+            .map(ResourceParams::Command),
+        Git::ID => core_module_for_resource::<Git>(module_span, params, system)
+            .map(ResourceParams::Git),
+        Systemd::ID => core_module_for_resource::<Systemd>(module_span, params, system)
+            .map(ResourceParams::Systemd),
+        User::ID => core_module_for_resource::<User>(module_span, params, system)
+            .map(ResourceParams::User),
+        Group::ID => core_module_for_resource::<Group>(module_span, params, system)
+            .map(ResourceParams::Group),
         other => Err(PlanItemToResourceError::UnsupportedCoreModuleId {
             id: other.to_string(),
         }),
@@ -44,8 +57,19 @@ pub fn core_module(
 }
 
 fn core_module_for_resource<R: ResourceType>(
+    module_span: Span,
     params_value: Option<Spanned<Value>>,
+    system: &System,
 ) -> Result<R::Params, PlanItemToResourceError> {
+    let os_kind = system.os.kind();
+    if !R::supported_on(os_kind) {
+        return Err(PlanItemToResourceError::CoreModuleNotSupportedOnOs {
+            id: R::ID.to_string(),
+            os_kind,
+            span: module_span,
+        });
+    }
+
     let params_value = params_value.ok_or(PlanItemToResourceError::MissingParams)?;
     let param_types = R::param_types();
 

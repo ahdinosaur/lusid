@@ -14,5 +14,6 @@ Highlights:
   never observe a partial write.
 - **`change_owner` / `change_owner_by_id`** — Unix-only uid/gid changes,
   resolving user/group names via `nix`.
-- **`copy_dir`** — currently shells out to `cp --recursive`. Portable-only
-  across GNU coreutils Linuxes; see the note in the source.
+- **`copy_dir`** — iterative async walk that mirrors the source tree at the
+  destination, copying files via `tokio::fs::copy` and recreating symlinks
+  verbatim. Portable across Linux and macOS.

@@ -19,8 +19,8 @@ use displaydoc::Display;
 use lusid_params::{ParamValuesFromRimuError, ParamsValidationError, validate};
 use lusid_resource::ResourceParams;
 use lusid_store::{Store, StoreError, StoreItemId};
-use lusid_system::System;
-use rimu::{Spanned, Value};
+use lusid_system::{OsKind, System};
+use rimu::{Span, Spanned, Value};
 use std::{path::PathBuf, string::FromUtf8Error};
 use thiserror::Error;
 
@@ -142,6 +142,13 @@ pub enum PlanItemToResourceError {
     /// Unsupported core module id \"{id}\"
     UnsupportedCoreModuleId { id: String },
 
+    /// Core module @core/{id} is not supported on host OS {os_kind}
+    CoreModuleNotSupportedOnOs {
+        id: String,
+        os_kind: OsKind,
+        span: Span,
+    },
+
     /// Failed to compute subtree for nested plan: {0}
     PlanSubtree(#[from] Box<PlanError>),
 }
@@ -186,7 +193,7 @@ async fn plan_item_to_resource(
         .collect();
 
     if let Some(core_module_id) = is_core_module(module) {
-        let params = core_module(core_module_id, params_value)?;
+        let params = core_module(core_module_id, module.span().clone(), params_value, system)?;
         Ok(PlanTree::Leaf {
             meta: PlanMeta {
                 id,

@@ -7,6 +7,7 @@ use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_operation::{Operation, operations::apt::AptOperation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_system::OsKind;
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
 use serde::Deserialize;
@@ -97,6 +98,10 @@ pub struct Apt;
 #[async_trait]
 impl ResourceType for Apt {
     const ID: &'static str = "apt";
+
+    fn supported_on(os: OsKind) -> bool {
+        matches!(os, OsKind::Linux)
+    }
 
     fn param_types() -> Option<Spanned<ParamTypes>> {
         let span = Span::new(SourceId::empty(), 0, 0);

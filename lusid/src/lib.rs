@@ -26,6 +26,7 @@ use lusid_apply_stdio::AppViewError;
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshVolume};
+use lusid_system::{GetSystemError, System};
 use lusid_vm::{Vm, VmError, VmOptions};
 use thiserror::Error;
 use tracing::error;
@@ -34,14 +35,12 @@ use which::which;
 use crate::config::{Config, ConfigError, MachineConfig};
 use crate::tui::{TuiError, tui};
 
-/// Parsed CLI. `lusid_apply_linux_*_path` point at prebuilt apply binaries
-/// for each target arch — the dev workflow uploads these to VMs rather than
-/// compiling inside the guest. Both fall back to `lusid.toml` → defaults.
-///
-/// Note(cc): only x86_64 and aarch64 are plumbed. Adding a new target arch
-/// means adding a new field + env var here *and* a selector wherever the
-/// arch is matched. Worth revisiting as a `HashMap<Arch, PathBuf>` if the
-/// list grows.
+/// Parsed CLI. The `lusid_apply_*_path` fields point at prebuilt apply
+/// binaries for each (OS family, arch) pair — the dev workflow uploads one
+/// into the VM rather than compiling inside the guest, and local apply runs
+/// the binary for its own host. Each field falls back to the matching
+/// `lusid.toml` entry, and finally to a `lusid-apply-<os>-<arch>` default
+/// resolved via `PATH`.
 #[derive(Parser, Debug)]
 #[command(name = "lusid", version, about = "Lusid CLI")]
 pub struct Cli {
@@ -59,6 +58,12 @@ pub struct Cli {
 
     #[arg(env = "LUSID_APPLY_LINUX_AARCH64", global = true)]
     pub lusid_apply_linux_aarch64_path: Option<String>,
+
+    #[arg(env = "LUSID_APPLY_MACOS_X86_64", global = true)]
+    pub lusid_apply_macos_x86_64_path: Option<String>,
+
+    #[arg(env = "LUSID_APPLY_MACOS_AARCH64", global = true)]
+    pub lusid_apply_macos_aarch64_path: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -129,6 +134,9 @@ pub enum AppError {
 
     #[error(transparent)]
     EnvVar(#[from] env::VarError),
+
+    #[error("failed to detect host system: {0}")]
+    System(#[from] GetSystemError),
 
     #[error(transparent)]
     Command(#[from] CommandError),
@@ -206,13 +214,11 @@ async fn cmd_machines_list(config: Config) -> Result<(), AppError> {
 // the TUI. `Command::output` here returns streaming handles, not a finished
 // `std::process::Output` — naming is from `lusid_cmd`, not `std`.
 async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
-    let Config {
-        ref lusid_apply_linux_x86_64_path,
-        ..
-    } = config;
     let MachineConfig { plan, params, .. } = config.local_machine()?;
+    let system = System::get().await?;
+    let apply_path = config.apply_path(system.os.kind(), system.arch)?;
 
-    let mut command = Command::new(lusid_apply_linux_x86_64_path);
+    let mut command = Command::new(apply_path);
     command
         .args(["--root", &config.root().to_string_lossy()])
         .args(["--plan", &plan.to_string_lossy()])
@@ -282,7 +288,7 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
     let dev_dir = format!("/home/{}", vm.user);
     let plan_dir = plan.parent().unwrap();
     let plan_filename = plan.file_name().unwrap().to_string_lossy();
-    let apply_bin = which(&config.lusid_apply_linux_x86_64_path)?;
+    let apply_bin = which(config.apply_path(machine.os.kind(), machine.arch)?)?;
 
     let volumes = vec![
         SshVolume::FilePath {

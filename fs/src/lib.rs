@@ -9,25 +9,18 @@
 //!   destination metadata (or source metadata, respectively), then rename. This means
 //!   readers never observe a half-written file.
 //! - [`change_owner`] / [`change_owner_by_id`]: uid/gid changes, Unix-only.
-//! - [`copy_dir`]: shells out to `cp --recursive` (see the note on the function for
-//!   portability caveats).
-//
-// TODO(cc): like `lusid-cmd`, this crate relies on tokio features (`fs`, `io-util`,
-// `process`) that are enabled transitively via the workspace rather than declared in
-// its own `Cargo.toml`. `cargo check -p lusid-fs` in isolation fails. Declare the
-// needed tokio features locally.
+//! - [`copy_dir`]: iterative async walk that recreates the source tree at the
+//!   destination, preserving symlinks verbatim. Portable across Linux and macOS.
 
 use nix::unistd::{Group, User};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::SystemTime;
 
 use filetime::FileTime;
 use thiserror::Error;
 use tokio::fs::{self};
 use tokio::io::AsyncWriteExt;
-use tokio::process::Command;
 
 #[derive(Error, Debug)]
 pub enum FsError {
@@ -37,25 +30,6 @@ pub enum FsError {
         #[source]
         source: std::io::Error,
     },
-
-    #[error("Failed to spawn copy from '{from}' to '{to}': {source}")]
-    CopyDirSpawn {
-        from: PathBuf,
-        to: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("Failed waiting for copy from '{from}' to '{to}': {source}")]
-    CopyDirWait {
-        from: PathBuf,
-        to: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    #[error("Copy command returned non-zero status from '{from}' to '{to}'")]
-    CopyDirStatus { from: PathBuf, to: PathBuf },
 
     #[error("Cannot read directory '{path}': {source}")]
     ReadDir {
@@ -212,6 +186,13 @@ pub enum FsError {
         source: std::io::Error,
     },
 
+    #[error("Cannot read symlink '{path}': {source}")]
+    ReadSymlink {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("Failed to set file times: {source}")]
     SetFileTimes {
         #[source]
@@ -229,45 +210,90 @@ pub async fn create_dir<P: AsRef<Path>>(path: P) -> Result<(), FsError> {
         })
 }
 
-/// Recursively copy a directory tree.
+/// Recursively copy the contents of `from` into `to`, mirroring the tree layout.
 ///
-/// Note(cc): shells out to `cp --recursive`, which is GNU coreutils — BSD `cp` on
-/// macOS uses `-R` instead, and Windows has no `cp` at all. If we ever care about
-/// non-Linux targets, swap to a Rust-native walker (e.g. the `walkdir` + manual copy
-/// pattern, or the `fs_extra` crate).
+/// - Regular files are copied via [`tokio::fs::copy`], which preserves permission bits.
+/// - Symbolic links are recreated as symlinks pointing at the original target; the
+///   target is *not* dereferenced, so dangling links round-trip cleanly.
+/// - Missing parent directories in `to` are created as needed.
+/// - Ownership and timestamps are not preserved — this matches `cp -R` without `-p`
+///   and avoids spurious `EPERM` when running unprivileged.
+/// - Special files (block/char devices, sockets, fifos) are silently skipped.
+///
+/// Iterative rather than recursive so the walk stays cheap and doesn't need boxed
+/// futures.
 pub async fn copy_dir<F: AsRef<Path>, T: AsRef<Path>>(from: F, to: T) -> Result<(), FsError> {
-    let from_path = from.as_ref();
-    let to_path = to.as_ref();
-    let from_buf = from_path.to_path_buf();
-    let to_buf = to_path.to_path_buf();
+    let from_root = from.as_ref().to_path_buf();
+    let to_root = to.as_ref().to_path_buf();
 
-    let mut child = Command::new("cp")
-        .arg("--recursive")
-        .arg(from_path)
-        .arg(to_path)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|source| FsError::CopyDirSpawn {
-            from: from_buf.clone(),
-            to: to_buf.clone(),
-            source,
-        })?;
+    create_dir(&to_root).await?;
 
-    let status = child.wait().await.map_err(|source| FsError::CopyDirWait {
-        from: from_buf.clone(),
-        to: to_buf.clone(),
-        source,
-    })?;
+    // Each entry is a subdirectory (relative to `from_root`) whose contents we still
+    // need to process. The empty path represents the root itself.
+    let mut pending: Vec<PathBuf> = vec![PathBuf::new()];
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(FsError::CopyDirStatus {
-            from: from_buf,
-            to: to_buf,
-        })
+    while let Some(rel_dir) = pending.pop() {
+        let src_dir = from_root.join(&rel_dir);
+
+        let mut entries = fs::read_dir(&src_dir)
+            .await
+            .map_err(|source| FsError::ReadDir {
+                path: src_dir.clone(),
+                source,
+            })?;
+
+        while let Some(entry) =
+            entries
+                .next_entry()
+                .await
+                .map_err(|source| FsError::ReadDirEntry {
+                    path: src_dir.clone(),
+                    source,
+                })?
+        {
+            let src_path = entry.path();
+            let rel_child = rel_dir.join(entry.file_name());
+            let dest_path = to_root.join(&rel_child);
+
+            let file_type = entry
+                .file_type()
+                .await
+                .map_err(|source| FsError::Metadata {
+                    path: src_path.clone(),
+                    source,
+                })?;
+
+            if file_type.is_symlink() {
+                let target =
+                    fs::read_link(&src_path)
+                        .await
+                        .map_err(|source| FsError::ReadSymlink {
+                            path: src_path.clone(),
+                            source,
+                        })?;
+                fs::symlink(&target, &dest_path).await.map_err(|source| {
+                    FsError::CreateSymlink {
+                        from: target,
+                        to: dest_path,
+                        source,
+                    }
+                })?;
+            } else if file_type.is_dir() {
+                create_dir(&dest_path).await?;
+                pending.push(rel_child);
+            } else if file_type.is_file() {
+                fs::copy(&src_path, &dest_path)
+                    .await
+                    .map_err(|source| FsError::CopyFile {
+                        from: src_path,
+                        to: dest_path,
+                        source,
+                    })?;
+            }
+        }
     }
+
+    Ok(())
 }
 
 pub async fn read_dir<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>, FsError> {
@@ -656,4 +682,83 @@ fn temporary_path_for(path: &Path) -> PathBuf {
         .as_nanos();
 
     path.with_extension(format!("{time}.tmp"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn copy_dir_mirrors_nested_tree() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        fs::create_dir_all(src.join("sub")).await.unwrap();
+        fs::write(src.join("top.txt"), b"top").await.unwrap();
+        fs::write(src.join("sub/nested.txt"), b"nested")
+            .await
+            .unwrap();
+
+        copy_dir(&src, &dst).await.unwrap();
+
+        assert_eq!(fs::read(dst.join("top.txt")).await.unwrap(), b"top");
+        assert_eq!(
+            fs::read(dst.join("sub/nested.txt")).await.unwrap(),
+            b"nested"
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_dir_preserves_symlinks_verbatim() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        fs::create_dir(&src).await.unwrap();
+        fs::write(src.join("real.txt"), b"real").await.unwrap();
+        // Relative target, and a dangling link — both should round-trip unchanged.
+        fs::symlink("real.txt", src.join("link.txt")).await.unwrap();
+        fs::symlink("nowhere", src.join("dangling")).await.unwrap();
+
+        copy_dir(&src, &dst).await.unwrap();
+
+        let link_meta = fs::symlink_metadata(dst.join("link.txt")).await.unwrap();
+        assert!(link_meta.file_type().is_symlink());
+        assert_eq!(
+            fs::read_link(dst.join("link.txt")).await.unwrap(),
+            PathBuf::from("real.txt")
+        );
+
+        let dangling_meta = fs::symlink_metadata(dst.join("dangling")).await.unwrap();
+        assert!(dangling_meta.file_type().is_symlink());
+        assert_eq!(
+            fs::read_link(dst.join("dangling")).await.unwrap(),
+            PathBuf::from("nowhere")
+        );
+    }
+
+    #[tokio::test]
+    async fn copy_dir_merges_into_existing_destination() {
+        let tmp = tempdir().unwrap();
+        let src = tmp.path().join("src");
+        let dst = tmp.path().join("dst");
+
+        fs::create_dir(&src).await.unwrap();
+        fs::write(src.join("new.txt"), b"new").await.unwrap();
+
+        fs::create_dir(&dst).await.unwrap();
+        fs::write(dst.join("existing.txt"), b"existing")
+            .await
+            .unwrap();
+
+        copy_dir(&src, &dst).await.unwrap();
+
+        assert_eq!(fs::read(dst.join("new.txt")).await.unwrap(), b"new");
+        assert_eq!(
+            fs::read(dst.join("existing.txt")).await.unwrap(),
+            b"existing"
+        );
+    }
 }

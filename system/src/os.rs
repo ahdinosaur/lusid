@@ -1,16 +1,18 @@
 //! OS detection. On Linux we parse `/etc/os-release` via the `etc-os-release` crate
-//! and map the `ID` to a known distro variant (Ubuntu / Debian / Arch for now).
+//! and map the `ID` to a known distro variant (Ubuntu / Debian / Arch for now). On
+//! macOS we shell out to `sw_vers -productVersion` for the product version string.
 //!
 //! The serde shape uses nested internal tags: the outer `type: "linux"` discriminates
 //! [`Os`], and the inner `linux: "ubuntu"` discriminates [`Linux`]. Version fields
-//! are named after the distro (`ubuntu: "22.04"`, `debian: 12`) so the plan-facing
-//! YAML reads naturally.
+//! are named after the distro (`ubuntu: "22.04"`, `debian: 12`, `macos: "15.3.1"`)
+//! so the plan-facing YAML reads naturally.
 
 use etc_os_release::{Error as OsReleaseError, OsRelease};
 use serde::{Deserialize, Serialize, de};
 use std::{
     fmt::{self, Display, Formatter},
     num::ParseIntError,
+    process::ExitStatus,
     str::FromStr,
 };
 use thiserror::Error;
@@ -22,12 +24,21 @@ use tokio::task::block_in_place;
 pub enum Os {
     #[serde(rename = "linux")]
     Linux(Linux),
+
+    #[serde(rename = "macos")]
+    MacOS {
+        #[serde(rename = "macos")]
+        version: String,
+    },
 }
 
 #[derive(Error, Debug)]
 pub enum GetOsError {
     #[error("failed to get OS on Linux: {0}")]
     Linux(#[from] GetLinuxError),
+
+    #[error("failed to get OS on macOS: {0}")]
+    MacOs(#[from] GetMacOsError),
 }
 
 impl Os {
@@ -35,6 +46,74 @@ impl Os {
     pub async fn get() -> Result<Self, GetOsError> {
         Ok(Os::Linux(Linux::get().await?))
     }
+
+    #[cfg(target_os = "macos")]
+    pub async fn get() -> Result<Self, GetOsError> {
+        let version = get_macos_version().await?;
+        Ok(Os::MacOS { version })
+    }
+
+    /// Strip version/distro detail and return just the OS family.
+    ///
+    /// Useful when choosing an apply-binary or any other artifact that varies
+    /// by OS family but not by minor release — `Os` carries distro/version
+    /// information that most resource-selection logic doesn't care about.
+    pub fn kind(&self) -> OsKind {
+        match self {
+            Os::Linux(_) => OsKind::Linux,
+            Os::MacOS { .. } => OsKind::MacOS,
+        }
+    }
+}
+
+/// OS-family key: the discriminant of [`Os`] without the embedded distro/version.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum OsKind {
+    #[serde(rename = "linux")]
+    Linux,
+    #[serde(rename = "macos")]
+    MacOS,
+}
+
+impl Display for OsKind {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            OsKind::Linux => write!(f, "linux"),
+            OsKind::MacOS => write!(f, "macos"),
+        }
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum GetMacOsError {
+    #[error("failed to execute sw_vers: {0}")]
+    SwVersSpawn(#[source] std::io::Error),
+
+    #[error("sw_vers exited with non-zero status: {status}")]
+    SwVersStatus { status: ExitStatus },
+
+    #[error("sw_vers returned empty version string")]
+    EmptyVersion,
+}
+
+#[cfg(target_os = "macos")]
+async fn get_macos_version() -> Result<String, GetMacOsError> {
+    let output = tokio::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .await
+        .map_err(GetMacOsError::SwVersSpawn)?;
+    if !output.status.success() {
+        return Err(GetMacOsError::SwVersStatus {
+            status: output.status,
+        });
+    }
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if version.is_empty() {
+        return Err(GetMacOsError::EmptyVersion);
+    }
+    Ok(version)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -135,6 +214,7 @@ impl Display for Os {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             Os::Linux(l) => write!(f, "linux-{}", l),
+            Os::MacOS { version } => write!(f, "macos-{}", version),
         }
     }
 }
@@ -179,8 +259,8 @@ mod tests {
     #[test]
     fn ubuntu_valid() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Ubuntu",
+            "type": "linux",
+            "linux": "ubuntu",
             "ubuntu": "22.04"
         }"#;
         let os: Os = from_str(j).unwrap();
@@ -190,8 +270,8 @@ mod tests {
     #[test]
     fn ubuntu_invalid_month() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Ubuntu",
+            "type": "linux",
+            "linux": "ubuntu",
             "ubuntu": "22.15"
         }"#;
         let err = serde_json::from_str::<Os>(j).unwrap_err();
@@ -201,8 +281,8 @@ mod tests {
     #[test]
     fn debian_u8() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Debian",
+            "type": "linux",
+            "linux": "debian",
             "debian": 12
         }"#;
         let os: Os = from_str(j).unwrap();
@@ -212,10 +292,20 @@ mod tests {
     #[test]
     fn arch_unit_variant() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Arch"
+            "type": "linux",
+            "linux": "arch"
         }"#;
         let os: Os = from_str(j).unwrap();
         assert_eq!(os.to_string(), "linux-arch");
+    }
+
+    #[test]
+    fn macos_version() {
+        let j = r#"{
+            "type": "macos",
+            "macos": "15.3.1"
+        }"#;
+        let os: Os = from_str(j).unwrap();
+        assert_eq!(os.to_string(), "macos-15.3.1");
     }
 }

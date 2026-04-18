@@ -7,4 +7,8 @@ edition = "2024"
 filetime = "0.2.26"
 nix.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util"] }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt"] }

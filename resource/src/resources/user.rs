@@ -10,6 +10,7 @@ use lusid_operation::{
     operations::{file::FilePath, user::UserOperation},
 };
 use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_system::OsKind;
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
 use serde::Deserialize;
@@ -216,6 +217,10 @@ pub struct User;
 #[async_trait]
 impl ResourceType for User {
     const ID: &'static str = "user";
+
+    fn supported_on(os: OsKind) -> bool {
+        matches!(os, OsKind::Linux)
+    }
 
     fn param_types() -> Option<Spanned<ParamTypes>> {
         let span = Span::new(SourceId::empty(), 0, 0);

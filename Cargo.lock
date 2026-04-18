@@ -2266,6 +2266,7 @@ version = "0.1.0"
 dependencies = [
  "filetime",
  "nix 0.30.1",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -2356,6 +2357,7 @@ dependencies = [
  "lusid-fs",
  "lusid-operation",
  "lusid-params",
+ "lusid-system",
  "lusid-view",
  "rimu",
  "serde",

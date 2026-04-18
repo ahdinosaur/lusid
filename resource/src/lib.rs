@@ -31,6 +31,7 @@ use lusid_causality::CausalityTree;
 use lusid_ctx::Context;
 use lusid_operation::Operation;
 use lusid_params::ParamTypes;
+use lusid_system::OsKind;
 use lusid_view::Render;
 use rimu::Spanned;
 use serde::de::DeserializeOwned;
@@ -67,6 +68,14 @@ use crate::resources::user::{User, UserChange, UserParams, UserResource, UserSta
 pub trait ResourceType {
     /// Stable identifier used as the `@core/<ID>` module name in plans.
     const ID: &'static str;
+
+    /// Whether this resource is meaningful on `os`. Used by the planner to gate
+    /// plan items up-front so a user gets a diagnostic instead of a cryptic
+    /// "command not found: apt-get" mid-apply. Default: supported everywhere —
+    /// resources that shell out to OS-specific tooling should override.
+    fn supported_on(_os: OsKind) -> bool {
+        true
+    }
 
     /// Rimu schema used to validate this resource's params. `None` means "no fields".
     fn param_types() -> Option<Spanned<ParamTypes>>;
