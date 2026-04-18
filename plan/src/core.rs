@@ -4,7 +4,7 @@
 
 use lusid_params::{ParamValues, validate};
 use lusid_resource::{
-    ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command,
+    ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, brew::Brew, command::Command,
     directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, systemd::Systemd,
     user::User,
 };
@@ -34,6 +34,8 @@ pub fn core_module(
             .map(ResourceParams::Apt),
         AptRepo::ID => core_module_for_resource::<AptRepo>(module_span, params, system)
             .map(ResourceParams::AptRepo),
+        Brew::ID => core_module_for_resource::<Brew>(module_span, params, system)
+            .map(ResourceParams::Brew),
         File::ID => core_module_for_resource::<File>(module_span, params, system)
             .map(ResourceParams::File),
         Directory::ID => core_module_for_resource::<Directory>(module_span, params, system)

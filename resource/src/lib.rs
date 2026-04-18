@@ -43,6 +43,7 @@ use crate::resources::apt::{Apt, AptChange, AptParams, AptResource, AptState};
 use crate::resources::apt_repo::{
     AptRepo, AptRepoChange, AptRepoParams, AptRepoResource, AptRepoState,
 };
+use crate::resources::brew::{Brew, BrewChange, BrewParams, BrewResource, BrewState};
 use crate::resources::command::{
     Command, CommandChange, CommandParams, CommandResource, CommandState,
 };
@@ -119,6 +120,7 @@ pub trait ResourceType {
 pub enum ResourceParams {
     Apt(AptParams),
     AptRepo(AptRepoParams),
+    Brew(BrewParams),
     File(FileParams),
     Directory(DirectoryParams),
     Pacman(PacmanParams),
@@ -135,6 +137,7 @@ impl Display for ResourceParams {
         match self {
             Apt(params) => params.fmt(f),
             AptRepo(params) => params.fmt(f),
+            Brew(params) => params.fmt(f),
             File(params) => params.fmt(f),
             Directory(params) => params.fmt(f),
             Pacman(params) => params.fmt(f),
@@ -153,6 +156,7 @@ impl Render for ResourceParams {
         match self {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
+            Brew(params) => params.render(),
             File(params) => params.render(),
             Directory(params) => params.render(),
             Pacman(params) => params.render(),
@@ -170,6 +174,7 @@ impl Render for ResourceParams {
 pub enum Resource {
     Apt(AptResource),
     AptRepo(AptRepoResource),
+    Brew(BrewResource),
     File(FileResource),
     Directory(DirectoryResource),
     Pacman(PacmanResource),
@@ -186,6 +191,7 @@ impl Display for Resource {
         match self {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
+            Brew(brew) => brew.fmt(f),
             File(file) => file.fmt(f),
             Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
@@ -204,6 +210,7 @@ impl Render for Resource {
         match self {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
+            Brew(params) => params.render(),
             File(params) => params.render(),
             Directory(params) => params.render(),
             Pacman(params) => params.render(),
@@ -224,6 +231,7 @@ impl Render for Resource {
 pub enum ResourceState {
     Apt(AptState),
     AptRepo(AptRepoState),
+    Brew(BrewState),
     File(FileState),
     Directory(DirectoryState),
     Pacman(PacmanState),
@@ -240,6 +248,7 @@ impl Display for ResourceState {
         match self {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
+            Brew(brew) => brew.fmt(f),
             File(file) => file.fmt(f),
             Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
@@ -258,6 +267,7 @@ impl Render for ResourceState {
         match self {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
+            Brew(params) => params.render(),
             File(params) => params.render(),
             Directory(params) => params.render(),
             Pacman(params) => params.render(),
@@ -279,6 +289,9 @@ pub enum ResourceStateError {
 
     #[error("apt-repo state error: {0}")]
     AptRepo(#[from] <AptRepo as ResourceType>::StateError),
+
+    #[error("brew state error: {0}")]
+    Brew(#[from] <Brew as ResourceType>::StateError),
 
     #[error("file state error: {0}")]
     File(#[from] <File as ResourceType>::StateError),
@@ -309,6 +322,7 @@ pub enum ResourceStateError {
 pub enum ResourceChange {
     Apt(AptChange),
     AptRepo(AptRepoChange),
+    Brew(BrewChange),
     File(FileChange),
     Directory(DirectoryChange),
     Pacman(PacmanChange),
@@ -325,6 +339,7 @@ impl Display for ResourceChange {
         match self {
             Apt(apt) => apt.fmt(f),
             AptRepo(apt_repo) => apt_repo.fmt(f),
+            Brew(brew) => brew.fmt(f),
             File(file) => file.fmt(f),
             Directory(directory) => directory.fmt(f),
             Pacman(pacman) => pacman.fmt(f),
@@ -343,6 +358,7 @@ impl Render for ResourceChange {
         match self {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
+            Brew(params) => params.render(),
             File(params) => params.render(),
             Directory(params) => params.render(),
             Pacman(params) => params.render(),
@@ -372,6 +388,7 @@ impl ResourceParams {
         match self {
             ResourceParams::Apt(params) => typed::<Apt>(params, Resource::Apt),
             ResourceParams::AptRepo(params) => typed::<AptRepo>(params, Resource::AptRepo),
+            ResourceParams::Brew(params) => typed::<Brew>(params, Resource::Brew),
             ResourceParams::File(params) => typed::<File>(params, Resource::File),
             ResourceParams::Directory(params) => typed::<Directory>(params, Resource::Directory),
             ResourceParams::Pacman(params) => typed::<Pacman>(params, Resource::Pacman),
@@ -409,6 +426,9 @@ impl Resource {
                     ResourceStateError::AptRepo,
                 )
                 .await
+            }
+            Resource::Brew(resource) => {
+                typed::<Brew>(ctx, resource, ResourceState::Brew, ResourceStateError::Brew).await
             }
             Resource::File(resource) => {
                 typed::<File>(ctx, resource, ResourceState::File, ResourceStateError::File).await
@@ -493,6 +513,9 @@ impl Resource {
             (Resource::AptRepo(resource), ResourceState::AptRepo(state)) => {
                 typed::<AptRepo>(resource, state, ResourceChange::AptRepo)
             }
+            (Resource::Brew(resource), ResourceState::Brew(state)) => {
+                typed::<Brew>(resource, state, ResourceChange::Brew)
+            }
             (Resource::File(resource), ResourceState::File(state)) => {
                 typed::<File>(resource, state, ResourceChange::File)
             }
@@ -532,6 +555,7 @@ impl ResourceChange {
         match self {
             ResourceChange::Apt(change) => Apt::operations(change),
             ResourceChange::AptRepo(change) => AptRepo::operations(change),
+            ResourceChange::Brew(change) => Brew::operations(change),
             ResourceChange::File(change) => File::operations(change),
             ResourceChange::Directory(change) => Directory::operations(change),
             ResourceChange::Pacman(change) => Pacman::operations(change),

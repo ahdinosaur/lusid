@@ -1,5 +1,6 @@
 pub mod apt;
 pub mod apt_repo;
+pub mod brew;
 pub mod command;
 pub mod directory;
 pub mod file;

@@ -36,6 +36,7 @@ pub mod operations;
 use crate::operations::{
     apt::{Apt, AptOperation},
     apt_repo::{AptRepo, AptRepoOperation},
+    brew::{Brew, BrewOperation},
     command::{Command, CommandOperation},
     directory::{Directory, DirectoryOperation},
     file::{File, FileOperation},
@@ -86,6 +87,7 @@ pub trait OperationType {
 pub enum Operation {
     Apt(AptOperation),
     AptRepo(AptRepoOperation),
+    Brew(BrewOperation),
     Pacman(PacmanOperation),
     File(FileOperation),
     Directory(DirectoryOperation),
@@ -106,6 +108,7 @@ impl Operation {
         let OperationsByType {
             apt,
             apt_repo,
+            brew,
             pacman,
             file,
             directory,
@@ -119,6 +122,7 @@ impl Operation {
         std::iter::empty()
             .chain(Apt::merge(apt).into_iter().map(Operation::Apt))
             .chain(AptRepo::merge(apt_repo).into_iter().map(Operation::AptRepo))
+            .chain(Brew::merge(brew).into_iter().map(Operation::Brew))
             .chain(Pacman::merge(pacman).into_iter().map(Operation::Pacman))
             .chain(File::merge(file).into_iter().map(Operation::File))
             .chain(
@@ -143,6 +147,9 @@ pub enum OperationApplyError {
 
     #[error("apt-repo operation failed: {0:?}")]
     AptRepo(<AptRepo as OperationType>::ApplyError),
+
+    #[error("brew operation failed: {0:?}")]
+    Brew(<Brew as OperationType>::ApplyError),
 
     #[error("pacman operation failed: {0:?}")]
     Pacman(<Pacman as OperationType>::ApplyError),
@@ -175,6 +182,7 @@ pub enum OperationApplyError {
 pub enum OperationApplyOutput {
     Apt(#[pin] <Apt as OperationType>::ApplyOutput),
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyOutput),
+    Brew(#[pin] <Brew as OperationType>::ApplyOutput),
     Pacman(#[pin] <Pacman as OperationType>::ApplyOutput),
     File(#[pin] <File as OperationType>::ApplyOutput),
     Directory(#[pin] <Directory as OperationType>::ApplyOutput),
@@ -193,6 +201,7 @@ impl Future for OperationApplyOutput {
         match self.project() {
             Apt(fut) => fut.poll(cx).map_err(OperationApplyError::Apt),
             AptRepo(fut) => fut.poll(cx).map_err(OperationApplyError::AptRepo),
+            Brew(fut) => fut.poll(cx).map_err(OperationApplyError::Brew),
             Pacman(fut) => fut.poll(cx).map_err(OperationApplyError::Pacman),
             File(fut) => fut.poll(cx).map_err(OperationApplyError::File),
             Directory(fut) => fut.poll(cx).map_err(OperationApplyError::Directory),
@@ -211,6 +220,7 @@ impl Future for OperationApplyOutput {
 pub enum OperationApplyStdout {
     Apt(#[pin] <Apt as OperationType>::ApplyStdout),
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyStdout),
+    Brew(#[pin] <Brew as OperationType>::ApplyStdout),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStdout),
     File(#[pin] <File as OperationType>::ApplyStdout),
     Directory(#[pin] <Directory as OperationType>::ApplyStdout),
@@ -231,6 +241,7 @@ impl AsyncRead for OperationApplyStdout {
         match self.project() {
             Apt(stream) => stream.poll_read(cx, buf),
             AptRepo(stream) => stream.poll_read(cx, buf),
+            Brew(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Directory(stream) => stream.poll_read(cx, buf),
@@ -249,6 +260,7 @@ impl AsyncRead for OperationApplyStdout {
 pub enum OperationApplyStderr {
     Apt(#[pin] <Apt as OperationType>::ApplyStderr),
     AptRepo(#[pin] <AptRepo as OperationType>::ApplyStderr),
+    Brew(#[pin] <Brew as OperationType>::ApplyStderr),
     Pacman(#[pin] <Pacman as OperationType>::ApplyStderr),
     File(#[pin] <File as OperationType>::ApplyStderr),
     Directory(#[pin] <Directory as OperationType>::ApplyStderr),
@@ -269,6 +281,7 @@ impl AsyncRead for OperationApplyStderr {
         match self.project() {
             Apt(stream) => stream.poll_read(cx, buf),
             AptRepo(stream) => stream.poll_read(cx, buf),
+            Brew(stream) => stream.poll_read(cx, buf),
             Pacman(stream) => stream.poll_read(cx, buf),
             File(stream) => stream.poll_read(cx, buf),
             Directory(stream) => stream.poll_read(cx, buf),
@@ -315,6 +328,16 @@ impl Operation {
                     OperationApplyOutput::AptRepo(output),
                     OperationApplyStdout::AptRepo(stdout),
                     OperationApplyStderr::AptRepo(stderr),
+                ))
+            }
+            Operation::Brew(op) => {
+                let (output, stdout, stderr) = Brew::apply(ctx, op)
+                    .await
+                    .map_err(OperationApplyError::Brew)?;
+                Ok((
+                    OperationApplyOutput::Brew(output),
+                    OperationApplyStdout::Brew(stdout),
+                    OperationApplyStderr::Brew(stderr),
                 ))
             }
             Operation::Pacman(op) => {
@@ -407,6 +430,7 @@ impl Display for Operation {
         match self {
             Apt(op) => Display::fmt(op, f),
             AptRepo(op) => Display::fmt(op, f),
+            Brew(op) => Display::fmt(op, f),
             Pacman(op) => Display::fmt(op, f),
             File(op) => Display::fmt(op, f),
             Directory(op) => Display::fmt(op, f),
@@ -425,6 +449,7 @@ impl Render for Operation {
         match self {
             Apt(params) => params.render(),
             AptRepo(params) => params.render(),
+            Brew(params) => params.render(),
             File(params) => params.render(),
             Directory(params) => params.render(),
             Pacman(params) => params.render(),
@@ -442,6 +467,7 @@ impl Render for Operation {
 pub struct OperationsByType {
     apt: Vec<AptOperation>,
     apt_repo: Vec<AptRepoOperation>,
+    brew: Vec<BrewOperation>,
     pacman: Vec<PacmanOperation>,
     file: Vec<FileOperation>,
     directory: Vec<DirectoryOperation>,
@@ -456,6 +482,7 @@ pub struct OperationsByType {
 fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> OperationsByType {
     let mut apt: Vec<AptOperation> = Vec::new();
     let mut apt_repo: Vec<AptRepoOperation> = Vec::new();
+    let mut brew: Vec<BrewOperation> = Vec::new();
     let mut pacman: Vec<PacmanOperation> = Vec::new();
     let mut file: Vec<FileOperation> = Vec::new();
     let mut directory: Vec<DirectoryOperation> = Vec::new();
@@ -468,6 +495,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
         match operation {
             Operation::Apt(op) => apt.push(op),
             Operation::AptRepo(op) => apt_repo.push(op),
+            Operation::Brew(op) => brew.push(op),
             Operation::Pacman(op) => pacman.push(op),
             Operation::File(op) => file.push(op),
             Operation::Directory(op) => directory.push(op),
@@ -481,6 +509,7 @@ fn partition_by_type(operations: impl IntoIterator<Item = Operation>) -> Operati
     OperationsByType {
         apt,
         apt_repo,
+        brew,
         pacman,
         file,
         directory,
