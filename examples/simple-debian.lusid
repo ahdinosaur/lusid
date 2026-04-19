@@ -13,7 +13,7 @@ setup: (params, ctx) =>
 
   - module: "@core/file"
     params:
-      type: "source"
+      state: "sourced"
       source: "./hello.txt"
       path: ctx.system.user.home + "/hello.txt"
 

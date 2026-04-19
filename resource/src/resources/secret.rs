@@ -104,7 +104,7 @@ impl ResourceType for Secret {
         let mut nodes = vec![
             CausalityTree::leaf(
                 CausalityMeta::id("file".into()),
-                FileResource::FileContents {
+                FileResource::Contents {
                     contents,
                     path: path.clone(),
                 },

@@ -30,7 +30,7 @@ pub struct SshChannelHandle {
 
 impl SshChannelHandle {
     /// Obtain a writer for the command's stdin.
-    pub fn stdin(&self) -> impl AsyncWrite + use<> {
+    pub fn stdin(&self) -> impl AsyncWrite + 'static {
         self.channel.stdin()
     }
 

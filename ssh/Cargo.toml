@@ -7,6 +7,7 @@ edition = "2024"
 lusid-fs = { path = "../fs", version = "0.1" }
 async-promise = "0.1.0"
 base64ct = "1.6.0"
+bytes = "1"
 futures-util = "0.3.31"
 russh.workspace = true
 russh-sftp = "2.1.1"

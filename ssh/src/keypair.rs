@@ -1,6 +1,7 @@
 use base64ct::LineEnding;
 use lusid_fs::{self as fs, FsError};
-use russh::keys::ssh_key::{private::Ed25519Keypair, rand_core::OsRng};
+use russh::keys::key::safe_rng;
+use russh::keys::ssh_key::private::Ed25519Keypair;
 use russh::keys::{PrivateKey, PublicKey};
 use std::path::Path;
 use thiserror::Error;
@@ -42,7 +43,7 @@ impl SshKeypair {
     /// Create a new in-memory keypair.
     #[tracing::instrument(skip_all)]
     pub fn create() -> Result<Self, SshKeypairError> {
-        let ed25519 = Ed25519Keypair::random(&mut OsRng);
+        let ed25519 = Ed25519Keypair::random(&mut safe_rng());
         let public_key = PublicKey::from(ed25519.public);
         let private_key = PrivateKey::from(ed25519);
         debug!("Created new SSH keypair");
