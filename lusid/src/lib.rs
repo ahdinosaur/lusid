@@ -59,6 +59,15 @@ pub struct Cli {
 
     #[arg(env = "LUSID_APPLY_LINUX_AARCH64", global = true)]
     pub lusid_apply_linux_aarch64_path: Option<String>,
+
+    /// Path to the age secret key used to decrypt project secrets. Overrides
+    /// `identity` in `lusid.toml`.
+    #[arg(long = "identity", env = "LUSID_IDENTITY", global = true)]
+    pub identity_path: Option<PathBuf>,
+
+    /// Directory of `*.age` files. Overrides `secrets_dir` in `lusid.toml`.
+    #[arg(long = "secrets-dir", env = "LUSID_SECRETS_DIR", global = true)]
+    pub secrets_dir: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -162,6 +171,13 @@ pub enum AppError {
 
     #[error(transparent)]
     Tui(#[from] TuiError),
+
+    #[error(
+        "secrets are configured (identity or secrets_dir) but `{context}` does not yet forward \
+         them to the target — see TODO in `lusid/src/lib.rs`. Remove the identity/secrets_dir \
+         config, or use `local apply`."
+    )]
+    SecretsNotYetSupported { context: &'static str },
 }
 
 /// Resolve the config path (CLI flag → `LUSID_CONFIG` env → CWD → `.`) and
@@ -218,6 +234,13 @@ async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
         .args(["--plan", &plan.to_string_lossy()])
         .args(["--log", &config.log]);
 
+    if let Some(identity_path) = &config.identity_path {
+        command.args(["--identity", &identity_path.to_string_lossy()]);
+    }
+    if let Some(secrets_dir) = &config.secrets_dir {
+        command.args(["--secrets-dir", &secrets_dir.to_string_lossy()]);
+    }
+
     if let Some(params) = params {
         let params_json = serde_json::to_string(&params)?;
         command.args(["--params", &params_json]);
@@ -238,6 +261,19 @@ async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
 // from config, connect to its hostname over SSH (using either agent auth or
 // a configured key), upload the plan + lusid-apply binary, run apply, and
 // pipe through the TUI — essentially `cmd_dev_*` without the VM bring-up.
+//
+// TODO(cc): secrets strategy for remote apply. The three options listed in
+// `lusid-secrets`'s crate-level doc apply equally here:
+//   1. ship identity → remote decrypts itself (simple, widens trust radius)
+//   2. decrypt on host, ship plaintext over SSH stdin (trust stays local,
+//      plaintext on two machines — likely first cut)
+//   3. per-target age recipients, re-encrypt for the target (best security,
+//      most key management)
+// Until this is picked, `remote apply` should not silently drop secrets —
+// either refuse to run when the project has secrets configured, or require
+// an explicit `--no-secrets` flag. See `cmd_dev_apply` for the same guard
+// (`AppError::SecretsNotYetSupported`) that should be added here once this
+// is implemented.
 async fn cmd_remote_apply(_config: Config, _machine_id: String) -> Result<(), AppError> {
     todo!()
 }
@@ -251,7 +287,21 @@ async fn cmd_remote_ssh(_config: Config, _machine_id: String) -> Result<(), AppE
 // apply remotely and stream its stdout/stderr through the TUI just like
 // local apply. The VM's SSH keypair lives inside its instance dir (see
 // `lusid_vm`).
+//
+// TODO(cc): secrets strategy for dev apply. Same three options as remote
+// apply — see `cmd_remote_apply` and the `lusid-secrets` crate doc. Dev
+// VMs are ephemeral, so option 1 (ship identity) is tempting but still
+// leaks the project identity onto a guest disk that may be backed up.
+// Until this is picked, we refuse to run when the project has secrets
+// configured rather than silently shipping a plan whose `ctx.secrets.*`
+// references all evaluate to Null on the guest.
 async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppError> {
+    if config.identity_path.is_some() || config.secrets_dir.is_some() {
+        return Err(AppError::SecretsNotYetSupported {
+            context: "dev apply",
+        });
+    }
+
     let MachineConfig {
         plan,
         machine,

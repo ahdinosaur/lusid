@@ -197,7 +197,7 @@ pub struct Plan {
     pub name: Option<Spanned<Name>>,
     pub version: Option<Spanned<Version>>,
     pub params: Option<Spanned<ParamTypes>>,
-    /// setup: (params, system) => list of PlanItem
+    /// setup: (params, ctx) => list of PlanItem
     pub setup: Spanned<SetupFunction>,
 }
 

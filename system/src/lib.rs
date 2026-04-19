@@ -1,7 +1,7 @@
 //! Runtime information about the machine lusid is running on.
 //!
-//! [`System`] is the Rust side of what plans receive as the `system` argument to
-//! their `setup(params, system)` function. It's serialized into a Rimu value via
+//! [`System`] is the Rust side of what plans see as `ctx.system` inside their
+//! `setup(params, ctx)` function. It's serialized into a Rimu value via
 //! `rimu-interop` and exposed so plans can branch on hostname, OS distro, user,
 //! and so on.
 //!

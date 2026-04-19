@@ -53,6 +53,7 @@ use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
 use crate::resources::group::{Group, GroupChange, GroupParams, GroupResource, GroupState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
 use crate::resources::podman::{Podman, PodmanChange, PodmanParams, PodmanResource, PodmanState};
+use crate::resources::secret::{Secret, SecretParams};
 use crate::resources::systemd::{
     Systemd, SystemdChange, SystemdParams, SystemdResource, SystemdState,
 };
@@ -107,6 +108,14 @@ pub trait ResourceType {
 
 /// Dispatcher over every resource's `Params` variant. Produced by the planner from the
 /// `@core/<id>` module a plan item refers to.
+///
+/// Note(cc): `Secret` is a thin specialisation of `File` (stricter default
+/// permissions, single-case schema) that reuses File's `Resource`/`State`/
+/// `Change`/`Operation` machinery. It therefore does not get its own
+/// variant in `Resource`/`ResourceState`/`ResourceChange` — the atoms it
+/// produces are ordinary `Resource::File` atoms. The provenance ("this
+/// file was written for a @core/secret plan item") is preserved only at
+/// this `ResourceParams` layer.
 #[derive(Debug, Clone)]
 pub enum ResourceParams {
     Apt(AptParams),
@@ -117,6 +126,7 @@ pub enum ResourceParams {
     Podman(PodmanParams),
     Command(CommandParams),
     Git(GitParams),
+    Secret(SecretParams),
     Systemd(SystemdParams),
     User(UserParams),
     Group(GroupParams),
@@ -134,6 +144,7 @@ impl Display for ResourceParams {
             Podman(params) => params.fmt(f),
             Command(params) => params.fmt(f),
             Git(params) => params.fmt(f),
+            Secret(params) => params.fmt(f),
             Systemd(params) => params.fmt(f),
             User(params) => params.fmt(f),
             Group(params) => params.fmt(f),
@@ -153,6 +164,7 @@ impl Render for ResourceParams {
             Podman(params) => params.render(),
             Command(params) => params.render(),
             Git(params) => params.render(),
+            Secret(params) => params.render(),
             Systemd(params) => params.render(),
             User(params) => params.render(),
             Group(params) => params.render(),
@@ -386,6 +398,7 @@ impl ResourceParams {
             ResourceParams::Podman(params) => typed::<Podman>(params, Resource::Podman),
             ResourceParams::Command(params) => typed::<Command>(params, Resource::Command),
             ResourceParams::Git(params) => typed::<Git>(params, Resource::Git),
+            ResourceParams::Secret(params) => typed::<Secret>(params, Resource::File),
             ResourceParams::Systemd(params) => typed::<Systemd>(params, Resource::Systemd),
             ResourceParams::User(params) => typed::<User>(params, Resource::User),
             ResourceParams::Group(params) => typed::<Group>(params, Resource::Group),

@@ -44,12 +44,12 @@ params:
   whatever:
     type: "boolean"
 
-setup: (params, system) =>
+setup: (params, ctx) =>
   - module: "@core/file"
     params:
       type: "source"
       source: "./gitconfig"
-      path: system.user.home + ".gitconfig"
+      path: ctx.system.user.home + ".gitconfig"
 
   - module: "@core/apt"
     id: "install-curl"
@@ -132,6 +132,32 @@ Each operation type defines:
 - How to merge multiple operations of the same type
 - How to apply an operation
 
+### Secrets
+
+Project secrets are [age](https://age-encryption.org)-encrypted `*.age`
+files stored alongside the plan — by default under `<root>/secrets/`. At
+the start of every apply they are decrypted with a single project-scoped
+identity and exposed to plans as `ctx.secrets.<stem>` (e.g. the file
+`secrets/api_key.age` becomes `ctx.secrets.api_key`).
+
+```
+setup: (params, ctx) =>
+  - module: "@core/secret"
+    params:
+      contents: ctx.secrets.api_key
+      path: ctx.system.user.home + "/.config/myapp/api-key"
+```
+
+`@core/secret` defaults `mode` to `0o600` (owner-only). If you'd rather
+manage the file yourself, `@core/file` with `type: "contents"` also
+accepts a secret `contents`, but leaves `mode`/`user`/`group` up to you.
+
+Pass the identity via `--identity <path>` (or `identity = "…"` in
+`lusid.toml`). When no identity is provided, `ctx.secrets` is an empty
+object — plans referencing a missing secret see `Null`. See
+[`lusid-secrets`](./secrets) for the trust model and the open work on
+remote/dev apply.
+
 ## Glossary
 
 - **Rimu**: embedded language used for `.lusid` plans.
@@ -144,12 +170,16 @@ Each operation type defines:
 - **Change**: computed delta from state to desired.
 - **Operation**: executable action(s) derived from change.
 - **Epoch**: dependency layer computed from causality constraints.
+- **ctx**: the Rimu object passed as the second argument to `setup(params, ctx)`;
+  bundles runtime inputs (`ctx.system.*`, `ctx.secrets.*`).
+- **Secret**: an age-decrypted plaintext loaded from `<root>/secrets/<name>.age`
+  and exposed as `ctx.secrets.<name>`.
 
 ## Roadmap
 
 - [ ] Implement my complete personal "SnugOS" config
 - [ ] Add system (i.e. Salt Stack "grains"): https://github.com/ahdinosaur/lusid/issues/9
-- [ ] Add secrets management: https://github.com/ahdinosaur/lusid/issues/7
+- [x] Add secrets management: https://github.com/ahdinosaur/lusid/issues/7
 - [ ] Add Nix-like immutable package builder: https://github.com/ahdinosaur/lusid/issues/1
 - [ ] Add unit testing framework for plans: https://github.com/ahdinosaur/lusid/issues/11
 - [ ] Add install hooks: https://github.com/ahdinosaur/lusid/issues/31

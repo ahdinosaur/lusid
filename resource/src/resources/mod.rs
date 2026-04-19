@@ -7,5 +7,6 @@ pub mod git;
 pub mod group;
 pub mod pacman;
 pub mod podman;
+pub mod secret;
 pub mod systemd;
 pub mod user;
