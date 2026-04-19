@@ -5,8 +5,8 @@
 use lusid_params::{ParamValues, validate};
 use lusid_resource::{
     ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command,
-    directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, systemd::Systemd,
-    user::User,
+    directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, podman::Podman,
+    systemd::Systemd, user::User,
 };
 use rimu::{Spanned, Value};
 
@@ -32,6 +32,7 @@ pub fn core_module(
             core_module_for_resource::<Directory>(params).map(ResourceParams::Directory)
         }
         Pacman::ID => core_module_for_resource::<Pacman>(params).map(ResourceParams::Pacman),
+        Podman::ID => core_module_for_resource::<Podman>(params).map(ResourceParams::Podman),
         Command::ID => core_module_for_resource::<Command>(params).map(ResourceParams::Command),
         Git::ID => core_module_for_resource::<Git>(params).map(ResourceParams::Git),
         Systemd::ID => core_module_for_resource::<Systemd>(params).map(ResourceParams::Systemd),
