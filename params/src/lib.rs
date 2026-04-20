@@ -1025,3 +1025,154 @@ pub fn validate(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimu::SourceId;
+
+    fn empty_span() -> Span {
+        Span::new(SourceId::empty(), 0, 0)
+    }
+
+    fn spanned<T: Clone>(inner: T) -> Spanned<T> {
+        Spanned::new(inner, empty_span())
+    }
+
+    /// Fresh `HostPath` → `Value::Tagged` round-trips back to the same absolute
+    /// path without re-resolving against the span's source dir (which would be
+    /// wrong for a forwarded value).
+    #[test]
+    fn host_path_round_trips_through_tagged_rimu() {
+        let original = PathBuf::from("/abs/origin/file.txt");
+        let spanned_param = spanned(ParamValue::HostPath(original.clone()));
+
+        let rimu_value = ParamValue::into_rimu_spanned(spanned_param);
+
+        assert!(matches!(
+            rimu_value.inner(),
+            Value::Tagged { tag, .. } if tag == TAG_HOST_PATH
+        ));
+
+        let round_tripped = ParamValue::from_rimu_spanned(rimu_value, ParamType::HostPath)
+            .expect("tagged host path must round-trip");
+
+        let ParamValue::HostPath(path) = round_tripped.into_inner() else {
+            panic!("expected HostPath");
+        };
+        assert_eq!(path, original);
+    }
+
+    /// Tagged target paths also round-trip, preserving the absolute inner.
+    #[test]
+    fn target_path_round_trips_through_tagged_rimu() {
+        let original = "/etc/foo".to_string();
+        let spanned_param = spanned(ParamValue::TargetPath(original.clone()));
+
+        let rimu_value = ParamValue::into_rimu_spanned(spanned_param);
+        let round_tripped = ParamValue::from_rimu_spanned(rimu_value, ParamType::TargetPath)
+            .expect("tagged target path must round-trip");
+
+        let ParamValue::TargetPath(path) = round_tripped.into_inner() else {
+            panic!("expected TargetPath");
+        };
+        assert_eq!(path, original);
+    }
+
+    #[test]
+    fn secret_round_trips_through_tagged_rimu() {
+        let plaintext = "hunter2".to_string();
+        let secret: Secret = Arc::new(SecretBox::new(Box::new(plaintext.clone())));
+        let spanned_param = spanned(ParamValue::Secret(secret));
+
+        let rimu_value = ParamValue::into_rimu_spanned(spanned_param);
+
+        assert!(matches!(
+            rimu_value.inner(),
+            Value::Tagged { tag, .. } if tag == TAG_SECRET
+        ));
+
+        let round_tripped = ParamValue::from_rimu_spanned(rimu_value, ParamType::Secret)
+            .expect("tagged secret must round-trip");
+
+        let ParamValue::Secret(secret) = round_tripped.into_inner() else {
+            panic!("expected Secret");
+        };
+        assert_eq!(secret.expose_secret(), &plaintext);
+    }
+
+    /// `validate_type` accepts the tagged form regardless of whether the inner
+    /// string is relative or absolute — the tag implies resolution already
+    /// happened on the origin side.
+    #[test]
+    fn validate_type_accepts_tagged_host_path_with_absolute_inner() {
+        let value = spanned(Value::Tagged {
+            tag: TAG_HOST_PATH.to_string(),
+            inner: Box::new(spanned(Value::String("/abs/foo".into()))),
+            meta: ValueObject::new(),
+        });
+        let typ = spanned(ParamType::HostPath);
+        validate_type(&typ, &value).expect("tagged host path with absolute inner is valid");
+    }
+
+    /// A tagged value with the right tag but a non-string inner is rejected —
+    /// the payload shape matters even when the tag is correct.
+    #[test]
+    fn validate_type_rejects_tagged_host_path_with_non_string_inner() {
+        let value = spanned(Value::Tagged {
+            tag: TAG_HOST_PATH.to_string(),
+            inner: Box::new(spanned(Value::Number(42.into()))),
+            meta: ValueObject::new(),
+        });
+        let typ = spanned(ParamType::HostPath);
+        assert!(validate_type(&typ, &value).is_err());
+    }
+
+    #[test]
+    fn validate_type_rejects_tagged_with_wrong_tag() {
+        let value = spanned(Value::Tagged {
+            tag: TAG_SECRET.to_string(),
+            inner: Box::new(spanned(Value::String("/abs/foo".into()))),
+            meta: ValueObject::new(),
+        });
+        let typ = spanned(ParamType::HostPath);
+        assert!(validate_type(&typ, &value).is_err());
+    }
+
+    /// `into_untagged_rimu` unwraps `HostPath`/`TargetPath`/`Secret` to plain
+    /// `Value::String` so serde can deserialize into `String` / `SecretBox`
+    /// primitives (`SerdeValue::Tagged` can't unwrap into those targets).
+    #[test]
+    fn into_untagged_rimu_flattens_path_and_secret_values() {
+        let plaintext = "hunter2".to_string();
+        let secret: Secret = Arc::new(SecretBox::new(Box::new(plaintext.clone())));
+
+        let mut values = IndexMap::new();
+        values.insert(
+            "host".into(),
+            spanned(ParamValue::HostPath(PathBuf::from("/abs/a"))),
+        );
+        values.insert(
+            "target".into(),
+            spanned(ParamValue::TargetPath("/etc/b".into())),
+        );
+        values.insert("secret".into(), spanned(ParamValue::Secret(secret)));
+        let param_values = ParamValues(values);
+
+        let Value::Object(object) = param_values.into_untagged_rimu() else {
+            panic!("expected object");
+        };
+        assert!(matches!(
+            object.get("host").unwrap().inner(),
+            Value::String(s) if s == "/abs/a"
+        ));
+        assert!(matches!(
+            object.get("target").unwrap().inner(),
+            Value::String(s) if s == "/etc/b"
+        ));
+        assert!(matches!(
+            object.get("secret").unwrap().inner(),
+            Value::String(s) if s == &plaintext
+        ));
+    }
+}
