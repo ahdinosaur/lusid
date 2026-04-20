@@ -33,12 +33,27 @@ use std::sync::Arc;
 use displaydoc::Display;
 use indexmap::IndexMap;
 use rimu::{
-    Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject, from_serde_value,
+    Number, SerdeValue, SerdeValueError, SourceId, Span, Spanned, Value, ValueObject,
+    from_serde_value,
 };
 use rimu_interop::{FromRimu, ToRimuError};
 use secrecy::{ExposeSecret, SecretBox};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
+
+/// Tag applied to [`Value::Tagged`] when a [`ParamValue::HostPath`] crosses into
+/// Rimu. Chosen to match the plan-schema spelling (`type: "host-path"`).
+pub const TAG_HOST_PATH: &str = "host-path";
+
+/// Tag applied to [`Value::Tagged`] when a [`ParamValue::TargetPath`] crosses
+/// into Rimu. See [`TAG_HOST_PATH`].
+pub const TAG_TARGET_PATH: &str = "target-path";
+
+/// Tag applied to [`Value::Tagged`] when a [`ParamValue::Secret`] crosses into
+/// Rimu. Rimu's tagged-value arithmetic propagates this tag through `+`
+/// concatenation, so a plan that writes `"prefix " + ctx.secrets.foo` produces
+/// a value that downstream resource params can still identify as secret.
+pub const TAG_SECRET: &str = "secret";
 
 /// A secret plaintext string. Wrapped in [`Arc`] so `ParamValue::Clone` stays
 /// cheap, and in [`SecretBox<String>`] so `Debug` is redacted and the plaintext
@@ -49,14 +64,19 @@ use thiserror::Error;
 /// needed so resource param structs can deserialise a secret field.
 ///
 /// Note(cc): the [`Secret`] wrapper protects the plaintext at the boundaries,
-/// but the plan evaluator has to hand secrets to Rimu as plain [`Value::String`]
-/// (see [`ParamValue::into_rimu`] below, and `secrets_value` in `plan/src/eval.rs`).
-/// Rimu is a general-purpose expression language with no notion of secrecy, so
-/// intermediate copies made by `+` concatenation, function calls, object/list
-/// construction etc. live as ordinary [`String`]s that are not zeroised. agenix
-/// / sops-nix sidestep this by materialising secrets at activation time and
-/// passing filenames through the evaluator instead of values. Until/unless Rimu
-/// grows a `Value::Secret`, this round-trip is an accepted limitation.
+/// but the plan evaluator hands secrets to Rimu inside a [`Value::Tagged`]
+/// wrapper whose inner is a plain [`Value::String`] (see
+/// [`ParamValue::into_rimu`] below, and `secrets_value` in `plan/src/eval.rs`).
+/// Rimu propagates the tag through arithmetic, so
+/// `"prefix " + ctx.secrets.foo` still lands on the resource side as a tagged
+/// secret string — that preserves provenance well enough to re-validate
+/// against a `secret` param type and to extend redaction to the concatenated
+/// form. The inner plaintext is still an ordinary `String` during Rimu
+/// evaluation, so copies made by function calls and object construction remain
+/// outside the `SecretBox` envelope and are not zeroised. agenix / sops-nix
+/// sidestep this by materialising secrets at activation time and passing
+/// filenames through the evaluator instead of values — revisit if
+/// plaintext-in-evaluator ever becomes load-bearing.
 pub type Secret = Arc<SecretBox<String>>;
 
 /// Schema node: the allowed shape of a single value.
@@ -149,12 +169,24 @@ pub enum ParamValue {
 }
 
 impl ParamValue {
+    /// Convert into a Rimu value, wrapping `HostPath`/`TargetPath`/`Secret` in a
+    /// [`Value::Tagged`] so the typed identity survives Rimu evaluation (including
+    /// `+` concatenation — Rimu propagates tags through unary/binary ops). Use
+    /// this when values are about to flow into the evaluator (plan `setup` args,
+    /// sub-plan forwarding).
     pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
-        let (value, span) = value.take();
-        Spanned::new(value.into_rimu(), span)
+        let (inner, span) = value.take();
+        Spanned::new(inner.into_rimu_with_span(span.clone()), span)
     }
 
+    /// Tagged conversion without a caller-provided span. Prefer
+    /// [`into_rimu_spanned`] where possible so the tagged inner carries the
+    /// same source location as the outer value.
     pub fn into_rimu(self) -> Value {
+        self.into_rimu_with_span(Span::new(SourceId::empty(), 0, 0))
+    }
+
+    fn into_rimu_with_span(self, span: Span) -> Value {
         match self {
             ParamValue::Literal(value) => value,
             ParamValue::Boolean(value) => Value::Boolean(value),
@@ -171,10 +203,61 @@ impl ParamValue {
                     .collect();
                 Value::Object(map)
             }
+            ParamValue::HostPath(path) => tagged(
+                TAG_HOST_PATH,
+                Value::String(path.to_string_lossy().into_owned()),
+                span,
+            ),
+            ParamValue::TargetPath(path) => tagged(TAG_TARGET_PATH, Value::String(path), span),
+            ParamValue::Secret(secret) => tagged(
+                TAG_SECRET,
+                Value::String(secret.expose_secret().to_owned()),
+                span,
+            ),
+        }
+    }
+
+    /// Convert into a Rimu value with `HostPath`/`TargetPath`/`Secret` flattened
+    /// to plain `Value::String`. Used on the serde-deserialize path
+    /// ([`ParamValues::into_type`]) because [`SerdeValue::Tagged`] doesn't
+    /// unwrap into primitive target types like `String` or `SecretBox<String>`.
+    pub fn into_untagged_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
+        let (inner, span) = value.take();
+        Spanned::new(inner.into_untagged_rimu(), span)
+    }
+
+    pub fn into_untagged_rimu(self) -> Value {
+        match self {
+            ParamValue::Literal(value) => value,
+            ParamValue::Boolean(value) => Value::Boolean(value),
+            ParamValue::String(value) => Value::String(value),
+            ParamValue::Number(number) => Value::Number(number),
+            ParamValue::List(items) => {
+                let items = items
+                    .into_iter()
+                    .map(Self::into_untagged_rimu_spanned)
+                    .collect();
+                Value::List(items)
+            }
+            ParamValue::Object(map) => {
+                let map = map
+                    .into_iter()
+                    .map(|(key, value)| (key, Self::into_untagged_rimu_spanned(value)))
+                    .collect();
+                Value::Object(map)
+            }
             ParamValue::HostPath(path) => Value::String(path.to_string_lossy().into_owned()),
             ParamValue::TargetPath(path) => Value::String(path),
             ParamValue::Secret(secret) => Value::String(secret.expose_secret().to_owned()),
         }
+    }
+}
+
+fn tagged(tag: &str, inner: Value, span: Span) -> Value {
+    Value::Tagged {
+        tag: tag.to_string(),
+        inner: Box::new(Spanned::new(inner, span)),
+        meta: ValueObject::new(),
     }
 }
 
@@ -283,10 +366,43 @@ impl ParamValue {
                     Err(ParamValueFromRimuError::HostPathSourceNeedsParent { source_path })
                 }
             }
+            // Tagged HostPath (forwarded from a parent plan): the inner string is
+            // already the fully-resolved absolute path — the tag was applied on the
+            // *original* evaluator exit, so we must not resolve against this span's
+            // source dir (which would be the forwarding plan, not the origin).
+            (ParamType::HostPath, Value::Tagged { tag, inner, .. }) if tag == TAG_HOST_PATH => {
+                match inner.into_inner() {
+                    Value::String(value) => Ok(ParamValue::HostPath(PathBuf::from(value))),
+                    inner => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
+                        typ: Box::new(ParamType::HostPath),
+                        value: Box::new(inner),
+                    }),
+                }
+            }
             (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
+            (ParamType::TargetPath, Value::Tagged { tag, inner, .. }) if tag == TAG_TARGET_PATH => {
+                match inner.into_inner() {
+                    Value::String(value) => Ok(ParamValue::TargetPath(value)),
+                    inner => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
+                        typ: Box::new(ParamType::TargetPath),
+                        value: Box::new(inner),
+                    }),
+                }
+            }
             (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Arc::new(
                 SecretBox::new(Box::new(value)),
             ))),
+            (ParamType::Secret, Value::Tagged { tag, inner, .. }) if tag == TAG_SECRET => {
+                match inner.into_inner() {
+                    Value::String(value) => Ok(ParamValue::Secret(Arc::new(SecretBox::new(
+                        Box::new(value),
+                    )))),
+                    inner => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
+                        typ: Box::new(ParamType::Secret),
+                        value: Box::new(inner),
+                    }),
+                }
+            }
             (typ, value) => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
                 typ: Box::new(typ),
                 value: Box::new(value),
@@ -389,6 +505,17 @@ impl ParamValues {
         Value::Object(object)
     }
 
+    /// Untagged counterpart of [`into_rimu`], used for serde deserialization
+    /// into resource param structs. See [`ParamValue::into_untagged_rimu`].
+    pub fn into_untagged_rimu(self) -> Value {
+        let object = self
+            .0
+            .into_iter()
+            .map(|(key, value)| (key, ParamValue::into_untagged_rimu_spanned(value)))
+            .collect();
+        Value::Object(object)
+    }
+
     pub fn get(&self, key: &str) -> Option<&Spanned<ParamValue>> {
         self.0.get(key)
     }
@@ -397,7 +524,12 @@ impl ParamValues {
     where
         T: DeserializeOwned,
     {
-        let value = self.into_rimu();
+        // Untagged path: `SerdeValue::Tagged` round-trips as an envelope object
+        // and doesn't unwrap into primitive target types (see
+        // `SerdeValue::deserialize_string`). Resource params know the typed
+        // shape via `ParamType`, so by the time we reach here the identity
+        // work is done — strip the tags and hand plaintext strings to serde.
+        let value = self.into_untagged_rimu();
         let serde_value = SerdeValue::from(value);
         from_serde_value(serde_value)
     }
@@ -707,24 +839,31 @@ fn validate_type(
         },
 
         ParamType::HostPath => {
-            #[allow(clippy::collapsible_if)]
-            if let Value::String(path) = value_inner {
-                if Path::new(path).is_relative() {
-                    return Ok(());
+            // Plain string: must be relative (resolution against the source dir
+            // happens later in `ParamValue::from_rimu_spanned`).
+            // Tagged: accept any tagged value whose tag is `host-path` and whose
+            // inner is a string — the inner is already an absolute path produced
+            // by the origin plan's resolution step.
+            match value_inner {
+                Value::String(path) if Path::new(path).is_relative() => Ok(()),
+                Value::Tagged { tag, inner, .. }
+                    if tag == TAG_HOST_PATH && matches!(inner.inner(), Value::String(_)) =>
+                {
+                    Ok(())
                 }
+                _ => Err(mismatch(param_type, value)),
             }
-            Err(mismatch(param_type, value))
         }
 
-        ParamType::TargetPath => {
-            #[allow(clippy::collapsible_if)]
-            if let Value::String(path) = value_inner {
-                if Path::new(path).is_absolute() {
-                    return Ok(());
-                }
+        ParamType::TargetPath => match value_inner {
+            Value::String(path) if Path::new(path).is_absolute() => Ok(()),
+            Value::Tagged { tag, inner, .. }
+                if tag == TAG_TARGET_PATH && matches!(inner.inner(), Value::String(_)) =>
+            {
+                Ok(())
             }
-            Err(mismatch(param_type, value))
-        }
+            _ => Err(mismatch(param_type, value)),
+        },
 
         ParamType::Secret => match value_inner {
             // Note(cc): empty-string secrets pass — a secret file can legitimately
@@ -732,6 +871,11 @@ fn validate_type(
             // to reject this, do it here with a dedicated error variant rather than
             // reusing `NullSecret` (which speaks specifically about typo-on-lookup).
             Value::String(_) => Ok(()),
+            Value::Tagged { tag, inner, .. }
+                if tag == TAG_SECRET && matches!(inner.inner(), Value::String(_)) =>
+            {
+                Ok(())
+            }
             Value::Null => Err(ValidateValueError::NullSecret {
                 expected_type: Box::new(param_type.clone()),
             }),

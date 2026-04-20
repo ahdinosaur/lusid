@@ -12,15 +12,19 @@
 //! access time — this needs Rimu support (a `Value::Secrets`-like container
 //! or a per-object lookup hook) and is deferred.
 //!
-//! Note(cc): secrets are handed to Rimu here as plain `Value::String`, so any
-//! intermediate copies Rimu makes during evaluation (e.g. `+` concatenation,
-//! function args) live as ordinary `String`s outside the `SecretBox` envelope
-//! and are not zeroised on drop. agenix / sops-nix avoid this by passing
+//! Note(cc): secrets are handed to Rimu inside a [`Value::Tagged`] wrapper (tag
+//! [`TAG_SECRET`]) so the typed identity survives `+` concatenation and other
+//! arithmetic — Rimu propagates the tag through unary/binary operators, which
+//! means `"prefix " + ctx.secrets.foo` still arrives at a downstream resource
+//! as a tagged secret string. The inner plaintext remains an ordinary `String`
+//! during Rimu evaluation, so intermediate copies Rimu makes (e.g. function
+//! args, object construction) still live outside the `SecretBox` envelope and
+//! are not zeroised on drop. agenix / sops-nix avoid this entirely by passing
 //! filenames through the evaluator and materialising secret contents at
 //! activation. See `lusid_params::Secret`'s doc for the wider context.
 
 use displaydoc::Display;
-use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};
+use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct, TAG_SECRET};
 use lusid_secrets::Secrets;
 use lusid_system::System;
 use rimu::{SourceId, Span, Spanned, Value, ValueObject, call};
@@ -73,13 +77,16 @@ pub(crate) fn evaluate(
     let secrets_value = {
         let mut map: ValueObject = Default::default();
         for (name, secret) in secrets.iter() {
-            map.insert(
-                name.to_string(),
-                Spanned::new(
-                    Value::String(secret.expose_secret().clone()),
-                    empty_span.clone(),
-                ),
+            let inner = Spanned::new(
+                Value::String(secret.expose_secret().clone()),
+                empty_span.clone(),
             );
+            let tagged = Value::Tagged {
+                tag: TAG_SECRET.to_string(),
+                inner: Box::new(inner),
+                meta: Default::default(),
+            };
+            map.insert(name.to_string(), Spanned::new(tagged, empty_span.clone()));
         }
         Spanned::new(Value::Object(map), empty_span.clone())
     };
