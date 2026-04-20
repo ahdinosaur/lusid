@@ -100,7 +100,15 @@ pub struct MachineConfig {
 
 impl Config {
     pub async fn load(path: &Path, cli: &Cli) -> Result<Self, ConfigError> {
-        let config = Self::load_config(path).await?;
+        // Callers may pass either a file (e.g. `./lusid.toml`) or a directory
+        // (e.g. CWD fallback) — normalize to the config file path up-front so
+        // downstream path resolution walks from the right base.
+        let path = if path.is_dir() {
+            path.join("lusid.toml")
+        } else {
+            path.to_owned()
+        };
+        let config = Self::load_config(&path).await?;
         let ConfigToml {
             machines,
             log,
@@ -110,7 +118,7 @@ impl Config {
             secrets_dir,
         } = config;
 
-        let machines = Self::resolve_machines(machines, path)?;
+        let machines = Self::resolve_machines(machines, &path)?;
 
         let log = cli.log.clone().or(log).unwrap_or("error".into());
 
@@ -129,15 +137,15 @@ impl Config {
             .identity_path
             .clone()
             .or(identity)
-            .map(|p| Self::resolve_relative_path(path, &p));
+            .map(|p| Self::resolve_relative_path(&path, &p));
         let secrets_dir = cli
             .secrets_dir
             .clone()
             .or(secrets_dir)
-            .map(|p| Self::resolve_relative_path(path, &p));
+            .map(|p| Self::resolve_relative_path(&path, &p));
 
         Ok(Config {
-            path: path.to_owned(),
+            path,
             machines,
             log,
             lusid_apply_linux_x86_64_path,
