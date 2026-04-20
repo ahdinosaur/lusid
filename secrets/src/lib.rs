@@ -1,129 +1,78 @@
 //! Age-encrypted secrets for lusid plans.
 //!
-//! A lusid project stores secrets as individual `*.age` files, decrypted at
-//! the start of an `apply` with a single project-scoped [`Identity`]. The
-//! decrypted values are exposed to plans via the `ctx.secrets` Rimu object
-//! (see `lusid-plan`).
+//! A lusid project stores secrets as individual `*.age` files under a
+//! `secrets/` directory, alongside a `recipients.toml` mapping each file
+//! stem to the keys that can decrypt it. At apply time the host's
+//! [`Identity`] decrypts every file up-front and hands the plaintexts to
+//! plans via the `ctx.secrets` Rimu object (see `lusid-plan`).
 //!
-//! # Scope (v1)
+//! # v2 at a glance
 //!
-//! - Local apply only (running on the machine being configured).
-//! - x25519 identities only — no passphrase-wrapped keys.
-//! - A single flat directory of `*.age` files — no nested namespaces.
-//! - Eager decryption: every secret is decrypted up-front at `load_all`,
-//!   regardless of whether any given plan actually uses it. This keeps the
-//!   redaction table complete (so output scanning cannot miss a secret that
-//!   a plan happened to forward through an operation we didn't anticipate).
+//! - **Two key kinds on the same file.** An age x25519 operator key and an
+//!   SSH ed25519 / RSA peer key can both appear in a file's recipient list.
+//!   The `age` crate's `ssh` feature handles both as `age::Recipient` /
+//!   `age::Identity` trait objects; see [`identity`] and [`recipients`].
+//! - **`recipients.toml` is the source of truth.** Parsed by
+//!   [`recipients::Recipients`]; file entries can reference either a bare
+//!   alias from `[keys]` or a group (`@name`) from `[groups]`.
+//! - **CLI lives here.** `lusid secrets {ls, edit, rekey, keygen, check, cat}`
+//!   is implemented in [`cli`] and dispatched from the `lusid` wrapper.
+//! - **Eager decryption at apply.** [`decrypt_dir`] decrypts every `*.age`
+//!   file in the project's `secrets/` directory, regardless of which secrets
+//!   a plan happens to read. Keeps the [`Redactor`] table complete so
+//!   substring-scrubbing of process output cannot miss a secret that was
+//!   forwarded through an operation we didn't anticipate.
 //!
 //! # Remote / dev apply (`TODO(cc)`)
 //!
-//! `lusid-apply` currently expects the decrypted secrets + identity live on
-//! the same machine as the plan target. For `cmd_dev_apply` (libvirt VM) and
-//! `cmd_remote_apply` (SSH) this is not obviously safe. Three options,
-//! none implemented yet:
+//! `lusid-apply` still runs locally only today. For `cmd_dev_apply`
+//! (libvirt VM) and `cmd_remote_apply` (SSH) the identity + secrets dir
+//! live on the host, not the target. Three options, none implemented:
 //!
-//! 1. **Ship the identity** to the target machine and decrypt there. Simple
-//!    but widens the trust radius — the VM/remote host holds the decryption
-//!    key.
-//! 2. **Decrypt on the host, ship the plaintext** inside the apply stdio
-//!    pipe. Keeps the identity local but puts plaintext on the wire (SSH
-//!    is encrypted, but we still have to hold plaintext in-memory on two
-//!    machines).
-//! 3. **Re-encrypt per target**: each target machine has its own age
-//!    recipient, the host re-encrypts secrets for that recipient before
-//!    shipping. Best security, most setup cost (per-target key management).
-//!    This is also the natural destination even without a remote story:
-//!    today every machine that holds the project identity can decrypt every
-//!    secret, with no way to scope (e.g.) a laptop-only secret away from a
-//!    VPS. agenix / sops-nix both model secrets as "encrypted to a list of
-//!    recipients" for exactly this reason.
+//! 1. **Ship the identity** to the target and decrypt there. Simple but
+//!    widens the trust radius.
+//! 2. **Decrypt on the host, ship plaintext** over the apply stdio pipe.
+//!    Trust stays local; plaintext briefly on two machines.
+//! 3. **Re-encrypt per target**: each target's SSH host key is a recipient
+//!    on exactly the secrets it needs; host re-encrypts before shipping.
+//!    Best security, most key management. v2 already lays the ground by
+//!    supporting peer SSH keys as recipients.
 //!
-//! Option 2 is the likely first cut. Whichever we pick, the [`Secrets`]
-//! type here is what the remote side would need to reconstruct. Until one
-//! is picked, `cmd_dev_apply` errors with `AppError::SecretsNotYetSupported`
-//! when the project has secrets configured (see `lusid/src/lib.rs`).
-//!
-//! # Key rotation (`TODO(cc)`)
-//!
-//! No rotation tooling today. If the project identity is ever exposed, the
-//! correct response is to (1) rotate each secret plaintext, (2) generate a
-//! new identity, and (3) re-encrypt each `*.age` file to the new recipient.
-//! agenix ships this as `agenix -r`. Worth a small CLI surface here once
-//! per-target recipients land — the two features share the re-encryption
-//! primitive.
+//! Option 2 is the likely first cut. Until one is picked, `cmd_dev_apply`
+//! errors with `AppError::SecretsNotYetSupported` when the project has
+//! secrets configured (see `lusid/src/lib.rs`).
 //!
 //! # UTF-8 plaintext only (`Note(cc)`)
 //!
-//! [`decrypt_bytes`] decodes every decrypted payload as UTF-8 and errors
+//! [`decrypt_dir`] decodes every decrypted payload as UTF-8 and errors
 //! with [`DecryptError::NotUtf8`] otherwise. This blocks binary secrets
 //! (raw keymaterial, PFX blobs, encrypted tarballs). If we need those,
 //! change [`Secret`] to wrap `Vec<u8>` and teach [`Redactor`] to substring-
 //! match on bytes. Cost is a minor API churn across every crate that
 //! currently calls `expose_secret()` and gets a `&String`.
 
+mod check;
+pub mod cli;
+mod crypto;
+mod identity;
+mod recipients;
+
 use std::collections::HashMap;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::str::FromStr;
-use std::sync::Arc;
+use std::path::Path;
 
 use displaydoc::Display;
 use lusid_params::Secret;
-use secrecy::{ExposeSecret, SecretBox};
+use secrecy::ExposeSecret;
 use thiserror::Error;
 use tokio::fs;
 
-/// A single decryption identity — an x25519 secret key.
-pub struct Identity {
-    inner: age::x25519::Identity,
-}
-
-impl FromStr for Identity {
-    type Err = IdentityError;
-
-    /// Parse an identity from a string like `AGE-SECRET-KEY-1...`.
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let inner = age::x25519::Identity::from_str(s).map_err(IdentityError::Parse)?;
-        Ok(Self { inner })
-    }
-}
-
-impl Identity {
-    /// Read an identity file from disk. The file must contain a single
-    /// `AGE-SECRET-KEY-...` line (comments prefixed with `#` are stripped).
-    pub async fn from_file(path: &Path) -> Result<Self, IdentityError> {
-        let text = fs::read_to_string(path)
-            .await
-            .map_err(|source| IdentityError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        let line = text
-            .lines()
-            .map(str::trim)
-            .find(|l| !l.is_empty() && !l.starts_with('#'))
-            .ok_or_else(|| IdentityError::Empty {
-                path: path.to_path_buf(),
-            })?;
-        line.parse()
-    }
-}
-
-#[derive(Debug, Error, Display)]
-pub enum IdentityError {
-    /// Failed to read identity file {path}: {source}
-    Read {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Identity file {path} has no key line
-    Empty { path: PathBuf },
-
-    /// Failed to parse identity: {0}
-    Parse(&'static str),
-}
+pub use crate::check::{CheckError, CheckReport, DriftReason, DriftedFile, ReadError};
+pub use crate::crypto::{DecryptError, EncryptError, HeaderError};
+pub use crate::identity::{Identity, IdentityError};
+pub use crate::recipients::{
+    FileEntry, Key, KeyParseError, RECIPIENTS_FILE, Recipients, RecipientsError, ResolveError,
+    ResolvedRecipient,
+};
 
 /// A bundle of decrypted secrets, keyed by filename stem (e.g. the file
 /// `secrets/api_key.age` becomes `api_key`).
@@ -254,12 +203,13 @@ impl Redactor {
 /// keyed by filename stem.
 ///
 /// Missing `dir` returns an empty [`Secrets`] — projects with no `secrets/`
-/// directory should work unchanged. Non-`.age` files in `dir` are ignored.
+/// directory should work unchanged. Non-`.age` files in `dir` are ignored
+/// (that's where `recipients.toml` lives).
 #[tracing::instrument(skip(identity), fields(dir = %dir.display()))]
-pub async fn decrypt_dir(identity: &Identity, dir: &Path) -> Result<Secrets, DecryptError> {
+pub async fn decrypt_dir(identity: &Identity, dir: &Path) -> Result<Secrets, DecryptDirError> {
     if !fs::try_exists(dir)
         .await
-        .map_err(|source| DecryptError::ScanDir {
+        .map_err(|source| DecryptDirError::ScanDir {
             dir: dir.to_path_buf(),
             source,
         })?
@@ -271,18 +221,19 @@ pub async fn decrypt_dir(identity: &Identity, dir: &Path) -> Result<Secrets, Dec
     let mut values: HashMap<String, Secret> = HashMap::new();
     let mut read_dir = fs::read_dir(dir)
         .await
-        .map_err(|source| DecryptError::ScanDir {
+        .map_err(|source| DecryptDirError::ScanDir {
             dir: dir.to_path_buf(),
             source,
         })?;
 
-    while let Some(entry) = read_dir
-        .next_entry()
-        .await
-        .map_err(|source| DecryptError::ScanDir {
-            dir: dir.to_path_buf(),
-            source,
-        })?
+    while let Some(entry) =
+        read_dir
+            .next_entry()
+            .await
+            .map_err(|source| DecryptDirError::ScanDir {
+                dir: dir.to_path_buf(),
+                source,
+            })?
     {
         let path = entry.path();
         if path.extension().and_then(|s| s.to_str()) != Some("age") {
@@ -294,12 +245,12 @@ pub async fn decrypt_dir(identity: &Identity, dir: &Path) -> Result<Secrets, Dec
 
         let ciphertext = fs::read(&path)
             .await
-            .map_err(|source| DecryptError::ReadFile {
+            .map_err(|source| DecryptDirError::ReadFile {
                 path: path.clone(),
                 source,
             })?;
 
-        let plaintext = decrypt_bytes(identity, &path, &ciphertext)?;
+        let plaintext = crypto::decrypt_bytes(identity, &path, &ciphertext)?;
 
         values.insert(stem, plaintext);
     }
@@ -308,74 +259,34 @@ pub async fn decrypt_dir(identity: &Identity, dir: &Path) -> Result<Secrets, Dec
     Ok(Secrets { values })
 }
 
-/// Decrypt a single age-encrypted payload. `path` is only used to label
-/// failures — the bytes themselves come from `ciphertext`.
-fn decrypt_bytes(
-    identity: &Identity,
-    path: &Path,
-    ciphertext: &[u8],
-) -> Result<Secret, DecryptError> {
-    let decryptor = age::Decryptor::new(ciphertext).map_err(|source| DecryptError::Decrypt {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let mut reader = decryptor
-        .decrypt(std::iter::once(&identity.inner as &dyn age::Identity))
-        .map_err(|source| DecryptError::Decrypt {
-            path: path.to_path_buf(),
-            source,
-        })?;
-
-    let mut plaintext = Vec::new();
-    reader
-        .read_to_end(&mut plaintext)
-        .map_err(|source| DecryptError::DecryptIo {
-            path: path.to_path_buf(),
-            source,
-        })?;
-
-    let plaintext = String::from_utf8(plaintext).map_err(|_| DecryptError::NotUtf8 {
-        path: path.to_path_buf(),
-    })?;
-    Ok(Arc::new(SecretBox::new(Box::new(plaintext))))
-}
-
+/// Errors from [`decrypt_dir`]: directory-scan I/O or per-file decryption
+/// failures. Individual file errors come straight from [`DecryptError`].
 #[derive(Debug, Error, Display)]
-pub enum DecryptError {
+pub enum DecryptDirError {
     /// Failed to scan secrets dir {dir}: {source}
     ScanDir {
-        dir: PathBuf,
+        dir: std::path::PathBuf,
         #[source]
         source: std::io::Error,
     },
 
     /// Failed to read encrypted file {path}: {source}
     ReadFile {
-        path: PathBuf,
+        path: std::path::PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    /// Failed to decrypt {path}: {source}
-    Decrypt {
-        path: PathBuf,
-        #[source]
-        source: age::DecryptError,
-    },
-
-    /// I/O error while decrypting {path}: {source}
-    DecryptIo {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Decrypted bytes for {path} are not valid UTF-8
-    NotUtf8 { path: PathBuf },
+    /// {0}
+    Decrypt(#[from] DecryptError),
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use secrecy::SecretBox;
+
     use super::*;
 
     fn secret_of(s: &str) -> Secret {

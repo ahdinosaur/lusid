@@ -41,7 +41,7 @@ use lusid_plan::{
     self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
-use lusid_secrets::{DecryptError, Identity, IdentityError, Secrets, decrypt_dir};
+use lusid_secrets::{DecryptDirError, Identity, IdentityError, Secrets, decrypt_dir};
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
@@ -111,7 +111,7 @@ pub enum ApplyError {
     Identity(#[from] IdentityError),
 
     #[error("failed to decrypt secrets: {0}")]
-    Decrypt(#[from] DecryptError),
+    DecryptDir(#[from] DecryptDirError),
 }
 
 /// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it

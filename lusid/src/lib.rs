@@ -25,6 +25,7 @@ use clap::{Parser, Subcommand};
 use lusid_apply_stdio::AppViewError;
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
+use lusid_secrets::cli::{CliEnv as SecretsCliEnv, CliError as SecretsCliError, SecretsCommand};
 use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshVolume};
 use lusid_vm::{Vm, VmError, VmOptions};
 use thiserror::Error;
@@ -91,6 +92,11 @@ pub enum Cmd {
     Dev {
         #[command(subcommand)]
         command: DevCmd,
+    },
+    #[doc = " Manage age-encrypted project secrets"]
+    Secrets {
+        #[command(subcommand)]
+        command: SecretsCommand,
     },
 }
 
@@ -178,6 +184,9 @@ pub enum AppError {
          config, or use `local apply`."
     )]
     SecretsNotYetSupported { context: &'static str },
+
+    #[error(transparent)]
+    Secrets(#[from] SecretsCliError),
 }
 
 /// Resolve the config path (CLI flag → `LUSID_CONFIG` env → CWD → `.`) and
@@ -210,7 +219,23 @@ pub async fn run(cli: Cli, config: Config) -> Result<(), AppError> {
             DevCmd::Apply { machine_id } => cmd_dev_apply(config, machine_id).await,
             DevCmd::Ssh { machine_id } => cmd_dev_ssh(config, machine_id).await,
         },
+        Cmd::Secrets { command } => cmd_secrets(config, command).await,
     }
+}
+
+// `secrets` subcommands live in `lusid-secrets::cli`. We only resolve the
+// project layout here — `secrets_dir` defaults to `<root>/secrets`.
+async fn cmd_secrets(config: Config, command: SecretsCommand) -> Result<(), AppError> {
+    let secrets_dir = config
+        .secrets_dir
+        .clone()
+        .unwrap_or_else(|| config.root().join("secrets"));
+    let env = SecretsCliEnv {
+        secrets_dir,
+        identity_path: config.identity_path.clone(),
+    };
+    lusid_secrets::cli::run(command, env).await?;
+    Ok(())
 }
 
 async fn cmd_machines_list(config: Config) -> Result<(), AppError> {
