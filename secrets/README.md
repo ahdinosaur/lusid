@@ -22,10 +22,13 @@ let secrets = decrypt_dir(&identity, &secrets_dir).await?;
   `AGE-SECRET-KEY-1...` x25519 key (operator) or an OpenSSH
   ed25519 / RSA private key (peer; e.g. `/etc/ssh/ssh_host_ed25519_key`).
   Passphrase-protected SSH keys are rejected.
-- [`Recipients`](src/recipients.rs) — parsed `recipients.toml`. `[keys]`
-  maps an alias to an age x25519 or SSH pubkey; `[groups]` names alias
-  lists; `[files]` maps each file stem to a recipient list that may
-  reference either a bare alias or `@group`.
+- [`Recipients`](src/recipients.rs) — parsed `recipients.toml`.
+  `[operators]` maps an alias to an age x25519 key (typically a human);
+  `[machines]` maps an alias to an SSH pubkey (typically a target's SSH
+  host key, keyed by `machine_id` so `lusid-apply` can re-encrypt for it at
+  apply time); `[groups]` names alias lists across either table; `[files]`
+  maps each file stem to a recipient list that may reference either a bare
+  alias or `@group`.
 - [`Secrets`](src/lib.rs) — map of `stem → Secret`, built by
   [`decrypt_dir`](src/lib.rs).
 - [`Secret`](../params/src/lib.rs) — `Arc<SecretBox<String>>`, cheap to
@@ -53,9 +56,11 @@ Implemented in [`cli.rs`](src/cli.rs); dispatched from the `lusid` wrapper.
 ## `recipients.toml` shape
 
 ```toml
-[keys]
+[operators]
 mikey     = "age1..."                              # operator x25519 key
-rpi4b-1   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5..."  # peer SSH host key
+
+[machines]
+rpi4b-1   = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5..."  # target SSH host key
 
 [groups]
 operators = ["mikey"]
@@ -65,6 +70,11 @@ all-pis   = ["rpi4b-1"]
 "api_token"       = { recipients = ["@operators", "rpi4b-1"] }
 "db_admin_pw"     = { recipients = ["@operators"] }
 ```
+
+Aliases must be unique across `[operators]` and `[machines]` (the two share
+a single namespace at resolve time). Machine aliases are expected to match
+the corresponding `[machines.<id>]` section in `lusid.toml` so that
+`lusid-apply` can look up a target's recipient key by machine id.
 
 Every `*.age` file must have a matching `[files]` entry; adding a new
 file means adding an entry first.

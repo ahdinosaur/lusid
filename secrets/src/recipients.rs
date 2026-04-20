@@ -4,8 +4,10 @@
 //! Shape:
 //!
 //! ```toml
-//! [keys]
-//! mikey   = "age1..."
+//! [operators]
+//! mikey = "age1..."
+//!
+//! [machines]
 //! rpi4b-1 = "ssh-ed25519 AAAA..."
 //!
 //! [groups]
@@ -16,9 +18,15 @@
 //! ```
 //!
 //! `@name` references in a file's `recipients` list expand via `[groups]`;
-//! bare names look up in `[keys]`. Expansion is shallow (groups cannot
-//! reference groups) — keeps the model predictable without meaningfully
-//! limiting usage.
+//! bare names look up in `[operators]` then `[machines]`. Expansion is shallow
+//! (groups cannot reference groups) — keeps the model predictable without
+//! meaningfully limiting usage.
+//!
+//! The operator / machine split is load-bearing for per-target re-encryption
+//! at apply time: `lusid-apply`'s host uses the target machine's SSH host key
+//! (looked up in `[machines]` by `machine_id`) as the sole recipient before
+//! shipping ciphertext to the guest. See [`Recipients::get_machine`] and
+//! [`crate::reencrypt_for_machine`].
 
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -35,15 +43,26 @@ use tokio::fs;
 pub const RECIPIENTS_FILE: &str = "recipients.toml";
 
 /// Parsed `recipients.toml`. Order preserved so listing commands match
-/// on-disk order.
-#[derive(Debug, Clone, Deserialize)]
+/// on-disk order. Operator and machine aliases share a single namespace at
+/// resolve time; load-time validation rejects duplicates across the two.
+#[derive(Debug, Clone)]
 pub struct Recipients {
-    #[serde(default)]
-    pub keys: IndexMap<String, Key>,
-    #[serde(default)]
+    pub operators: IndexMap<String, Key>,
+    pub machines: IndexMap<String, Key>,
     pub groups: IndexMap<String, Vec<String>>,
-    #[serde(default)]
     pub files: IndexMap<String, FileEntry>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct RecipientsToml {
+    #[serde(default)]
+    operators: IndexMap<String, Key>,
+    #[serde(default)]
+    machines: IndexMap<String, Key>,
+    #[serde(default)]
+    groups: IndexMap<String, Vec<String>>,
+    #[serde(default)]
+    files: IndexMap<String, FileEntry>,
 }
 
 /// A single entry in `[keys]`. Parsed eagerly so a malformed key is surfaced
@@ -61,7 +80,9 @@ pub struct FileEntry {
 
 impl Recipients {
     /// Load `recipients.toml` from `<secrets_dir>/recipients.toml`. Missing
-    /// file returns [`RecipientsError::Missing`].
+    /// file returns [`RecipientsError::Missing`]. A collision between an
+    /// operator and machine alias is rejected up-front — aliases share a
+    /// namespace at resolve time.
     pub async fn load(secrets_dir: &Path) -> Result<Self, RecipientsError> {
         let path = secrets_dir.join(RECIPIENTS_FILE);
         let text = match fs::read_to_string(&path).await {
@@ -71,7 +92,31 @@ impl Recipients {
             }
             Err(source) => return Err(RecipientsError::Read { path, source }),
         };
-        toml::from_str(&text).map_err(|source| RecipientsError::Parse { path, source })
+        let raw: RecipientsToml =
+            toml::from_str(&text).map_err(|source| RecipientsError::Parse { path, source })?;
+        Self::from_toml(raw)
+    }
+
+    fn from_toml(raw: RecipientsToml) -> Result<Self, RecipientsError> {
+        let RecipientsToml {
+            operators,
+            machines,
+            groups,
+            files,
+        } = raw;
+        for alias in operators.keys() {
+            if machines.contains_key(alias) {
+                return Err(RecipientsError::AliasCollision {
+                    alias: alias.clone(),
+                });
+            }
+        }
+        Ok(Recipients {
+            operators,
+            machines,
+            groups,
+            files,
+        })
     }
 
     /// Resolve a file stem's recipient list into concrete age recipients.
@@ -118,8 +163,9 @@ impl Recipients {
         via_group: Option<&str>,
     ) -> Result<ResolvedRecipient, ResolveError> {
         let key = self
-            .keys
+            .operators
             .get(alias)
+            .or_else(|| self.machines.get(alias))
             .ok_or_else(|| ResolveError::UnknownAlias {
                 file: stem.to_owned(),
                 alias: alias.to_owned(),
@@ -129,6 +175,14 @@ impl Recipients {
             alias: alias.to_owned(),
             key: key.clone(),
         })
+    }
+
+    /// Look up a machine's recipient key by `machine_id`. Returns the matching
+    /// entry from `[machines]`, or `None` if the alias is absent. Deliberately
+    /// does not fall back to `[operators]` — per-target re-encryption only
+    /// ever encrypts to a machine's own key.
+    pub fn get_machine(&self, machine_id: &str) -> Option<&Key> {
+        self.machines.get(machine_id)
     }
 
     /// Every file stem listed in `[files]`, in declaration order.
@@ -243,6 +297,9 @@ pub enum RecipientsError {
         #[source]
         source: toml::de::Error,
     },
+
+    /// Alias {alias:?} declared in both [operators] and [machines]
+    AliasCollision { alias: String },
 }
 
 #[derive(Debug, Error, Display)]
@@ -295,8 +352,10 @@ mod tests {
     use super::*;
 
     const SAMPLE: &str = r#"
-[keys]
+[operators]
 mikey = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
+
+[machines]
 rpi = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHsKLqeplhpW+uObz5dvMgjz1OxfM/XXUB+VHtZ6isGN alice@rust"
 
 [groups]
@@ -307,16 +366,22 @@ operators = ["mikey"]
 "db_pw" = { recipients = ["@operators"] }
 "#;
 
+    fn parse_toml(s: &str) -> Result<Recipients, RecipientsError> {
+        let raw: RecipientsToml = toml::from_str(s).unwrap();
+        Recipients::from_toml(raw)
+    }
+
     fn parse() -> Recipients {
-        toml::from_str(SAMPLE).unwrap()
+        parse_toml(SAMPLE).unwrap()
     }
 
     #[test]
-    fn parses_keys_groups_files() {
+    fn parses_operators_machines_groups_files() {
         let r = parse();
-        assert_eq!(r.keys.len(), 2);
-        assert!(matches!(r.keys["mikey"], Key::X25519(_)));
-        assert!(matches!(r.keys["rpi"], Key::Ssh(_)));
+        assert_eq!(r.operators.len(), 1);
+        assert_eq!(r.machines.len(), 1);
+        assert!(matches!(r.operators["mikey"], Key::X25519(_)));
+        assert!(matches!(r.machines["rpi"], Key::Ssh(_)));
         assert_eq!(r.groups["operators"], vec!["mikey"]);
         assert_eq!(r.files.len(), 2);
     }
@@ -331,9 +396,9 @@ operators = ["mikey"]
 
     #[test]
     fn deduplicates_across_expansion() {
-        let r: Recipients = toml::from_str(
+        let r = parse_toml(
             r#"
-[keys]
+[operators]
 a = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
 
 [groups]
@@ -359,9 +424,9 @@ g = ["a"]
 
     #[test]
     fn unknown_alias() {
-        let r: Recipients = toml::from_str(
+        let r = parse_toml(
             r#"
-[keys]
+[operators]
 a = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
 [files]
 "f" = { recipients = ["b"] }
@@ -376,9 +441,9 @@ a = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
 
     #[test]
     fn unknown_group() {
-        let r: Recipients = toml::from_str(
+        let r = parse_toml(
             r#"
-[keys]
+[operators]
 a = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
 [files]
 "f" = { recipients = ["@bogus"] }
@@ -392,9 +457,32 @@ a = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
     }
 
     #[test]
+    fn alias_collision_errors() {
+        let err = parse_toml(
+            r#"
+[operators]
+dup = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
+
+[machines]
+dup = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHsKLqeplhpW+uObz5dvMgjz1OxfM/XXUB+VHtZ6isGN alice@rust"
+"#,
+        )
+        .unwrap_err();
+        assert!(matches!(err, RecipientsError::AliasCollision { .. }));
+    }
+
+    #[test]
+    fn get_machine_only_returns_from_machines_table() {
+        let r = parse();
+        assert!(r.get_machine("rpi").is_some());
+        // Operators are deliberately excluded.
+        assert!(r.get_machine("mikey").is_none());
+    }
+
+    #[test]
     fn ssh_stanza_tag_deterministic() {
         let r = parse();
-        let ssh_key = r.keys["rpi"].clone();
+        let ssh_key = r.machines["rpi"].clone();
         let tag1 = ssh_key.ssh_stanza_tag().unwrap();
         let tag2 = ssh_key.ssh_stanza_tag().unwrap();
         assert_eq!(tag1, tag2);

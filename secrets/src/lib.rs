@@ -14,7 +14,10 @@
 //!   `age::Identity` trait objects; see [`identity`] and [`recipients`].
 //! - **`recipients.toml` is the source of truth.** Parsed by
 //!   [`recipients::Recipients`]; file entries can reference either a bare
-//!   alias from `[keys]` or a group (`@name`) from `[groups]`.
+//!   alias from `[operators]`/`[machines]` or a group (`@name`) from
+//!   `[groups]`. Operators decrypt on the host (x25519 identity); machines
+//!   are targets keyed by `machine_id` whose SSH host key is a recipient on
+//!   exactly the secrets they need.
 //! - **CLI lives here.** `lusid secrets {ls, edit, rekey, keygen, check, cat}`
 //!   is implemented in [`cli`] and dispatched from the `lusid` wrapper.
 //! - **Eager decryption at apply.** [`decrypt_dir`] decrypts every `*.age`
