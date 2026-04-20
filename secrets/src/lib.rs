@@ -63,6 +63,7 @@ mod recipients;
 use std::collections::HashMap;
 use std::path::Path;
 
+use age::Recipient;
 use displaydoc::Display;
 use lusid_params::Secret;
 use secrecy::ExposeSecret;
@@ -282,6 +283,71 @@ pub enum DecryptDirError {
 
     /// {0}
     Decrypt(#[from] DecryptError),
+}
+
+/// One re-encrypted secret produced by [`reencrypt_for_machine`]: the file
+/// stem (e.g. `api_token`) and the new age ciphertext encrypted to the
+/// target's key. Callers typically write each back as
+/// `<remote_secrets_dir>/<stem>.age` on the target.
+#[derive(Debug, Clone)]
+pub struct ReencryptedSecret {
+    pub stem: String,
+    pub ciphertext: Vec<u8>,
+}
+
+/// Decrypt every `*.age` under `secrets_dir` with `host_identity`, then
+/// re-encrypt each plaintext to `machine_key` alone and return the resulting
+/// ciphertexts.
+///
+/// This is the host-side of per-target re-encryption: a `remote apply` /
+/// `dev apply` invocation uses this to produce a bundle of ciphertexts
+/// decryptable only by the target machine's key, ships them over SSH, and
+/// points the guest's `lusid-apply` at them via `--secrets-dir`.
+///
+/// Plaintexts are held only inside the returned [`Secrets`]' `SecretBox` and
+/// are zeroised when it drops at function return. Callers never see the
+/// plaintext.
+#[tracing::instrument(skip(host_identity, machine_key), fields(dir = %secrets_dir.display()))]
+pub async fn reencrypt_for_machine(
+    host_identity: &Identity,
+    secrets_dir: &Path,
+    machine_key: &Key,
+) -> Result<Vec<ReencryptedSecret>, ReencryptDirError> {
+    let secrets = decrypt_dir(host_identity, secrets_dir).await?;
+    let recipients: Vec<Box<dyn Recipient + Send>> = match machine_key {
+        Key::X25519(k) => vec![Box::new(k.clone())],
+        Key::Ssh(k) => vec![Box::new(k.clone())],
+    };
+
+    let mut out = Vec::with_capacity(secrets.len());
+    for (stem, secret) in secrets.iter() {
+        // `path` is only used for error labelling by encrypt_bytes — a
+        // virtual `<stem>.age` keeps diagnostics meaningful when the error
+        // surfaces without adding a filesystem round-trip.
+        let virtual_path = Path::new(stem);
+        let ciphertext = crypto::encrypt_bytes(
+            &recipients,
+            virtual_path,
+            secret.expose_secret().as_bytes(),
+        )?;
+        out.push(ReencryptedSecret {
+            stem: stem.to_owned(),
+            ciphertext,
+        });
+    }
+
+    tracing::info!(count = out.len(), "re-encrypted secrets for machine");
+    Ok(out)
+}
+
+/// Errors from [`reencrypt_for_machine`].
+#[derive(Debug, Error, Display)]
+pub enum ReencryptDirError {
+    /// {0}
+    DecryptDir(#[from] DecryptDirError),
+
+    /// {0}
+    Encrypt(#[from] EncryptError),
 }
 
 #[cfg(test)]
