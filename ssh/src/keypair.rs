@@ -6,6 +6,7 @@ use russh::keys::{PrivateKey, PublicKey};
 use std::path::Path;
 use thiserror::Error;
 use tracing::debug;
+use zeroize::Zeroizing;
 
 #[derive(Error, Debug)]
 pub enum SshKeypairError {
@@ -86,6 +87,21 @@ impl SshKeypair {
         let public_key_exists = fs::path_exists(&public_key_path).await?;
         let private_key_exists = fs::path_exists(&private_key_path).await?;
         Ok(public_key_exists && private_key_exists)
+    }
+
+    /// Public key in OpenSSH authorized-keys form, e.g.
+    /// `ssh-ed25519 AAAAC3... [comment]`. Useful when the pubkey needs to
+    /// flow through a text-shaped interface (cloud-init, `authorized_keys`,
+    /// an age SSH recipient).
+    pub fn public_openssh(&self) -> Result<String, SshKeypairError> {
+        Ok(self.public_key.to_openssh()?)
+    }
+
+    /// Private key in OpenSSH PEM form (`-----BEGIN OPENSSH PRIVATE KEY-----`),
+    /// zeroised on drop. Useful for writing to a target-side identity file
+    /// that `age::ssh::Identity::from_buffer` can later read.
+    pub fn private_openssh(&self) -> Result<Zeroizing<String>, SshKeypairError> {
+        Ok(self.private_key.to_openssh(LineEnding::default())?)
     }
 
     /// Load a keypair from the directory.
