@@ -26,24 +26,24 @@
 //!   substring-scrubbing of process output cannot miss a secret that was
 //!   forwarded through an operation we didn't anticipate.
 //!
-//! # Remote / dev apply (`TODO(cc)`)
+//! # Remote / dev apply
 //!
-//! `lusid-apply` still runs locally only today. For `cmd_dev_apply`
-//! (libvirt VM) and `cmd_remote_apply` (SSH) the identity + secrets dir
-//! live on the host, not the target. Three options, none implemented:
+//! Non-local applies forward secrets via **per-target re-encryption**: the
+//! host decrypts every `*.age` with the operator identity, re-encrypts each
+//! plaintext to the target's SSH key alone (see [`reencrypt_for_machine`]),
+//! and ships the resulting ciphertexts + the target's identity file over
+//! SFTP. The guest's `lusid-apply` decrypts locally with the target SSH key.
+//! The operator identity never leaves the host.
 //!
-//! 1. **Ship the identity** to the target and decrypt there. Simple but
-//!    widens the trust radius.
-//! 2. **Decrypt on the host, ship plaintext** over the apply stdio pipe.
-//!    Trust stays local; plaintext briefly on two machines.
-//! 3. **Re-encrypt per target**: each target's SSH host key is a recipient
-//!    on exactly the secrets it needs; host re-encrypts before shipping.
-//!    Best security, most key management. v2 already lays the ground by
-//!    supporting peer SSH keys as recipients.
+//! Status:
 //!
-//! Option 2 is the likely first cut. Until one is picked, `cmd_dev_apply`
-//! errors with `AppError::SecretsNotYetSupported` when the project has
-//! secrets configured (see `lusid/src/lib.rs`).
+//! - **`cmd_dev_apply`** (VM): wired. Uses the VM's ephemeral auth keypair
+//!   as both the age recipient and, shipped to the guest, the age identity.
+//! - **`cmd_remote_apply`** (real SSH target): still `todo!()`. The intended
+//!   shape is the same as `cmd_dev_apply` except the recipient key comes
+//!   from [`Recipients::get_machine`] (looked up by `machine_id` in
+//!   `recipients.toml`'s `[machines]` table) and the guest identity is the
+//!   target's existing `/etc/ssh/ssh_host_ed25519_key`.
 //!
 //! # UTF-8 plaintext only (`Note(cc)`)
 //!

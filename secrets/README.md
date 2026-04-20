@@ -84,10 +84,13 @@ file means adding an entry first.
 - **Operator + peer keys** coexist on the same file. The `age` crate's
   `ssh` feature handles both via `age::Recipient` / `age::Identity` trait
   objects.
-- **Local apply only.** `dev apply` / `remote apply` do not currently
-  forward secrets to the target. See the crate-level module doc for the
-  three candidate strategies (ship identity / decrypt-on-host / per-target
-  re-encryption).
+- **Per-target re-encryption for non-local applies.** `dev apply` decrypts
+  with the operator identity on the host, re-encrypts each plaintext to
+  the VM's ephemeral SSH keypair, and ships the ciphertexts + that keypair
+  (as the guest's age identity) over SFTP. The operator identity never
+  leaves the host. `remote apply` is still `todo!()` but will follow the
+  same shape using a machine's declared `[machines]` SSH key. See
+  [`reencrypt_for_machine`](src/lib.rs).
 - **Eager decryption.** Every file is decrypted at apply start even if no
   plan reads it — keeps the [`Redactor`]'s table complete.
 - **UTF-8 plaintext only.** Binary secrets (keymaterial blobs, PFX, etc.)
@@ -99,5 +102,4 @@ file means adding an entry first.
   positives.
 
 Non-goals for v2: passphrase-protected identities, age plugins
-(YubiKey/TPM/1Password), per-target re-encryption at apply time, and
-binary secrets.
+(YubiKey/TPM/1Password), and binary secrets.

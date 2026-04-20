@@ -1,50 +1,28 @@
 ## TODO
 
-### Implement remote/dev apply secrets via per-target re-encryption
+### Wire remote apply to per-target re-encryption
 
-`lusid-apply` runs locally only today. `remote apply` and `dev apply` do
-not forward secrets to the target — `cmd_dev_apply` errors with
-`SecretsNotYetSupported` when the project has secrets configured, and
-`cmd_remote_apply` is still `todo!()`. See the three candidate strategies
-listed in `secrets/src/lib.rs`'s crate doc and the `TODO(cc)`s in
-`lusid/src/lib.rs` (around `cmd_remote_apply` / `cmd_dev_apply`).
+`cmd_dev_apply` now forwards secrets to the VM via per-target
+re-encryption: the host decrypts every `*.age` with the operator identity,
+re-encrypts each plaintext to the VM's ephemeral SSH keypair, and ships
+ciphertexts + that keypair (as the guest's age identity) over SFTP. See
+`reencrypt_for_machine` in `secrets/src/lib.rs` and the `cmd_dev_apply`
+wiring in `lusid/src/lib.rs`.
 
-Pick **option 3** (per-target re-encryption): each target machine's SSH
-host key is a recipient on exactly the secrets it needs, and the host
-re-encrypts before shipping the ciphertext to the guest. The v2
-`recipients.toml` already supports SSH peer keys, so the key plumbing is
-mostly there — what's missing is the re-encryption step at apply time
-and a clear answer to whose key is whose.
+`cmd_remote_apply` is still `todo!()`. The expected shape mirrors
+`cmd_dev_apply` — the only substantive differences are:
 
-This likely means making the operator/machine distinction explicit in
-the data model:
-
-- **Operators** decrypt on the host (x25519 keys stored under
-  `~/.config/lusid/identity`).
-- **Machines** are targets that can also be recipients of the secrets
-  they need (SSH host keys under `/etc/ssh/ssh_host_ed25519_key`).
-
-Today `[keys]` in `recipients.toml` is a flat namespace with both kinds
-mixed. Options to explore:
-
-1. Keep the flat `[keys]` table and infer kind from the key type
-   (`age1...` → operator, `ssh-...` → machine). Simplest; fragile if we
-   ever want an x25519-keyed machine.
-2. Split into `[operators]` and `[machines]` tables at the TOML level.
-   Makes the model explicit; each machine's entry can then carry extra
-   metadata (hostname, ssh port, default secrets list).
-3. Tag each `[keys]` entry with a `kind = "operator" | "machine"` field.
-   Less disruptive than (2) but more string-typed.
-
-`lusid.toml`'s `[machines]` section already names machines — ideally
-that's the same identifier space as the secrets recipient list, so
-`lusid secrets rekey` / remote apply can look up a machine's SSH host
-key without re-declaring it.
-
-Rollout order: (a) settle on the data model, (b) wire `remote apply` /
-`dev apply` to re-encrypt for the target machine's recipient before
-shipping, (c) guest decrypts with its SSH host key via the existing
-`Identity::from_file` path.
+- Recipient key comes from `Recipients::get_machine(machine_id)`
+  (looked up by `machine_id` in `recipients.toml`'s `[machines]` table),
+  not an ephemeral VM auth key.
+- Guest identity is the target's existing
+  `/etc/ssh/ssh_host_ed25519_key`, so we don't SFTP an identity file —
+  we just pass `--identity=/etc/ssh/ssh_host_ed25519_key` to the remote
+  `lusid-apply`. (This does require lusid-apply to run as root on the
+  target, which it likely does anyway.)
+- The rest of remote apply (resolving the target address, SSH auth, plan
+  upload, TUI streaming) still needs to land before the secrets step is
+  relevant.
 
 ### Remove secret plaintext from Rimu; replace with `@core/secrets` module
 

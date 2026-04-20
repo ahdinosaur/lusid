@@ -88,10 +88,14 @@ via `ctx.secrets.<stem>`. Invariants:
 - **Short secrets are not redacted.** `Secrets::redactor()` skips anything
   below `REDACT_MIN_LEN` (8) — substring-matching `"ab"` against arbitrary
   process output is worse than leaving it.
-- `lusid-apply` runs **locally only** today. `dev apply` / `remote apply`
-  intentionally do not forward identity/secrets_dir to the guest. See
-  `TODO(cc)`s in `lusid/src/lib.rs` and `secrets/src/lib.rs` for the three
-  candidate strategies before enabling those paths.
+- `dev apply` forwards secrets to the guest via **per-target
+  re-encryption**: the host decrypts with the operator identity, re-encrypts
+  each plaintext to the VM's ephemeral SSH keypair, and ships the
+  ciphertexts + that keypair (as the guest's age identity) over SFTP. The
+  operator identity never leaves the host. See `reencrypt_for_machine` in
+  `secrets/src/lib.rs` and the `cmd_dev_apply` wiring in `lusid/src/lib.rs`.
+  `remote apply` is still `todo!()`; it is expected to follow the same
+  shape using a machine's declared `[machines]` SSH key.
 
 
 ## Build / run / test (agent checklist)
