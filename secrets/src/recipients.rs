@@ -167,21 +167,6 @@ impl Key {
             }
         }
     }
-
-    /// The stanza tag byte string ("X25519", "ssh-ed25519", or "ssh-rsa").
-    pub fn stanza_kind(&self) -> &'static str {
-        match self {
-            Key::X25519(_) => "X25519",
-            Key::Ssh(r) => {
-                let s = r.to_string();
-                if s.starts_with("ssh-ed25519") {
-                    "ssh-ed25519"
-                } else {
-                    "ssh-rsa"
-                }
-            }
-        }
-    }
 }
 
 impl age::Recipient for Key {

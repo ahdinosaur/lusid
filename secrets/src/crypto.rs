@@ -114,20 +114,6 @@ pub fn read_header_stanzas(ciphertext: &[u8]) -> Result<Vec<Stanza>, HeaderError
 
 #[derive(Debug, Error, Display)]
 pub enum DecryptError {
-    /// Failed to scan secrets dir {dir}: {source}
-    ScanDir {
-        dir: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
-    /// Failed to read encrypted file {path}: {source}
-    ReadFile {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
-
     /// Failed to decrypt {path}: {source}
     Decrypt {
         path: PathBuf,
