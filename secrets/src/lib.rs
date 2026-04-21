@@ -325,11 +325,8 @@ pub async fn reencrypt_for_machine(
         // virtual `<stem>.age` keeps diagnostics meaningful when the error
         // surfaces without adding a filesystem round-trip.
         let virtual_path = Path::new(stem);
-        let ciphertext = crypto::encrypt_bytes(
-            &recipients,
-            virtual_path,
-            secret.expose_secret().as_bytes(),
-        )?;
+        let ciphertext =
+            crypto::encrypt_bytes(&recipients, virtual_path, secret.expose_secret().as_bytes())?;
         out.push(ReencryptedSecret {
             stem: stem.to_owned(),
             ciphertext,

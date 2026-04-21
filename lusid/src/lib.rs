@@ -387,8 +387,7 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
         // on guest via cloud-init), is ephemeral per-VM, and re-using it here
         // avoids a second keygen + a cloud-init host-key injection path.
         let machine_key: Key = vm_keypair.public_openssh()?.parse()?;
-        let reencrypted =
-            reencrypt_for_machine(&host_identity, &secrets_dir, &machine_key).await?;
+        let reencrypted = reencrypt_for_machine(&host_identity, &secrets_dir, &machine_key).await?;
 
         let private_pem = vm_keypair.private_openssh()?;
         volumes.push(SshVolume::FileBytes {

@@ -63,21 +63,3 @@ Concrete shape:
 This also resolves the `Note(cc)` about typo-on-lookup: a
 `ctx.secrets.<typo>` that becomes `Null` currently silently propagates;
 a strict secret-reference container errors at evaluation time.
-
-### Read identity key material via `SecretBox`
-
-`Identity::from_file` uses `fs::read_to_string` in
-`secrets/src/identity.rs`, which loads the private key into a plain
-`String`. The `age` crate wraps the parsed form in `SecretString`
-internally, so the window is short — but the read buffer is still an
-ordinary heap allocation that isn't zeroised on drop.
-
-Switch the read path to land the bytes directly in a `SecretBox<String>`
-(or `SecretBox<Vec<u8>>` and decode UTF-8 inside the secret envelope),
-so the raw key material is zeroised as soon as parsing is done. The
-in-memory `Identity` can keep its current shape (it already holds
-`age::x25519::Identity` / `age::ssh::Identity`, both of which own their
-own `SecretString`s); only the transient file-read buffer changes.
-
-Small scope, but closes a gap that's visible in heap dumps and is
-cheap to fix once we're done with the bigger items above.

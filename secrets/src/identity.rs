@@ -18,6 +18,7 @@ use std::str::FromStr;
 
 use age_core::format::{FileKey, Stanza};
 use displaydoc::Display;
+use secrecy::{ExposeSecret, SecretBox};
 use thiserror::Error;
 use tokio::fs;
 
@@ -51,14 +52,20 @@ impl std::fmt::Debug for Identity {
 
 impl Identity {
     /// Read an identity file from disk. See module docs for the accepted formats.
+    ///
+    /// The file contents are held in a [`SecretBox`] for the duration of
+    /// parsing, so the raw key material buffer is zeroised as soon as this
+    /// function returns. The parsed [`Identity`] keeps its key inside the
+    /// `age` crate's own `SecretString` envelope.
     pub async fn from_file(path: &Path) -> Result<Self, IdentityError> {
-        let text = fs::read_to_string(path)
-            .await
-            .map_err(|source| IdentityError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?;
-        parse(&text, Some(path))
+        let text: SecretBox<String> =
+            SecretBox::new(Box::new(fs::read_to_string(path).await.map_err(
+                |source| IdentityError::Read {
+                    path: path.to_path_buf(),
+                    source,
+                },
+            )?));
+        parse(text.expose_secret(), Some(path))
     }
 
     /// Borrow this identity as the age crate's trait object, for use with
