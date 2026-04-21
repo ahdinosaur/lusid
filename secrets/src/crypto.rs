@@ -11,10 +11,10 @@ use std::sync::Arc;
 use age::Recipient;
 use age_core::format::{Stanza, read::age_stanza};
 use displaydoc::Display;
-use lusid_params::Secret;
 use secrecy::SecretBox;
 use thiserror::Error;
 
+use crate::Secret;
 use crate::identity::Identity;
 
 const AGE_V1_MAGIC: &[u8] = b"age-encryption.org/v1\n";

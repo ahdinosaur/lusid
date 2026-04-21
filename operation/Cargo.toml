@@ -10,7 +10,9 @@ lusid-fs = { path = "../fs", version = "0.1" }
 lusid-http = { path = "../http", version = "0.1" }
 lusid-view = { path = "../view", version = "0.1" }
 async-trait.workspace = true
+displaydoc.workspace = true
 pin-project = "1.1.10"
+secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true

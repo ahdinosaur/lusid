@@ -57,10 +57,10 @@ use tracing::{debug, error, info};
 /// optional JSON object (validated against the plan's params schema).
 ///
 /// Secrets: when `identity_path` is provided, every `*.age` file under
-/// `secrets_dir` is eagerly decrypted and exposed to plans via
-/// `ctx.secrets.*`. When `identity_path` is `None`, plans see an empty
-/// `ctx.secrets` regardless of `secrets_dir` — i.e. no identity means no
-/// decryption is even attempted.
+/// `secrets_dir` is eagerly decrypted and placed on [`Context`] for
+/// `@core/secret` resources to reference by name. When `identity_path` is
+/// `None`, no decryption is attempted — any `@core/secret` reference will
+/// error at apply time with `MissingSecret`.
 pub struct ApplyOptions {
     pub root_path: PathBuf,
     pub plan_id: PlanId,
@@ -134,12 +134,13 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     let system = System::get().await?;
 
     // Load + decrypt secrets, if an identity was provided. Without an
-    // identity we skip decryption entirely — plans see `ctx.secrets` as an
-    // empty object. We eagerly decrypt so the redaction table is complete
-    // regardless of which secrets any particular plan happens to touch.
+    // identity we skip decryption entirely — `@core/secret` resources will
+    // error on name lookup if any plan references a secret. We eagerly
+    // decrypt so the redaction table is complete regardless of which
+    // secrets any particular plan happens to touch.
     let secrets = match identity_path.as_deref() {
         None => {
-            info!("no identity provided; ctx.secrets will be empty");
+            info!("no identity provided; secrets bundle will be empty");
             Secrets::empty()
         }
         Some(identity_path) => {
@@ -153,6 +154,9 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     // Built once up-front; applied to every per-operation stdout/stderr
     // line before emit. Best-effort — see `Redactor` docs for caveats.
     let redactor = secrets.redactor();
+    // Put the secrets bundle on the context so `@core/secret` resources
+    // and `FileSource::Secret` operations can resolve by name at apply time.
+    ctx.set_secrets(secrets);
 
     info!(plan = %plan_id, "using plan");
 
@@ -170,7 +174,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     };
 
     // Parse/evaluate to tree of resource params.
-    let resource_params = plan(plan_id, param_values, &mut store, &system, &secrets).await?;
+    let resource_params = plan(plan_id, param_values, &mut store, &system).await?;
     debug!("Resource params: {resource_params:?}");
     emit(AppUpdate::ResourceParams {
         resource_params: render_plan_tree(resource_params.clone()),

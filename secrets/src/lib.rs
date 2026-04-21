@@ -4,7 +4,9 @@
 //! `secrets/` directory, alongside a `recipients.toml` mapping each file
 //! stem to the keys that can decrypt it. At apply time the host's
 //! [`Identity`] decrypts every file up-front and hands the plaintexts to
-//! plans via the `ctx.secrets` Rimu object (see `lusid-plan`).
+//! `@core/secret` resources by name — plaintexts never enter the Rimu
+//! evaluator (agenix-style: plans reference secrets by name, contents
+//! materialise at apply).
 //!
 //! # v2 at a glance
 //!
@@ -62,11 +64,11 @@ mod recipients;
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use age::Recipient;
 use displaydoc::Display;
-use lusid_params::Secret;
-use secrecy::ExposeSecret;
+use secrecy::{ExposeSecret, SecretBox};
 use thiserror::Error;
 use tokio::fs;
 
@@ -77,6 +79,15 @@ pub use crate::recipients::{
     FileEntry, Key, KeyParseError, RECIPIENTS_FILE, Recipients, RecipientsError, ResolveError,
     ResolvedRecipient,
 };
+
+/// Decrypted secret plaintext. Wrapped in [`Arc`] so cloning (e.g. into the
+/// [`Redactor`]) is cheap, and in [`SecretBox<String>`] so `Debug` is
+/// redacted and the plaintext is zeroised when the last clone drops.
+///
+/// `SecretBox<String>` (rather than [`secrecy::SecretString`], a.k.a.
+/// `SecretBox<str>`) is used because only the sized form implements
+/// `serde::Deserialize`.
+pub type Secret = Arc<SecretBox<String>>;
 
 /// A bundle of decrypted secrets, keyed by filename stem (e.g. the file
 /// `secrets/api_key.age` becomes `api_key`).

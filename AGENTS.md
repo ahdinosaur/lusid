@@ -6,7 +6,7 @@
 
 **Lusid** takes a `.lusid` plan (written in the **Rimu** language), optionally a parameters object, and:
 
-1. Loads + evaluates the plan’s `setup(params, ctx)` function → returns a list of **PlanItem**s. (`ctx` is a Rimu object bundling runtime inputs — `{ system, secrets }`; see the Secrets section below.)
+1. Loads + evaluates the plan’s `setup(params, ctx)` function → returns a list of **PlanItem**s. (`ctx` is a Rimu object bundling runtime inputs — currently `{ system }`. Secrets are **not** on `ctx`; plans reference them by name via `@core/secret`. See the Secrets section below.)
 2. Converts PlanItems into either:
    - **Core modules** (`@core/*`) → become typed `ResourceParams` (apt/file/pacman today)
    - Or nested plans (module path) → recursively planned
@@ -73,29 +73,48 @@ The `lusid` TUI expects this exact protocol. Avoid printing human text to stdout
 ### Secrets (age-encrypted)
 Project secrets live as individual `*.age` files under `<root>/secrets` and
 are decrypted at the start of `apply` with a single project-scoped
-[`Identity`](./secrets/src/lib.rs). The decrypted values are handed to plans
-via `ctx.secrets.<stem>`. Invariants:
+[`Identity`](./secrets/src/lib.rs). The decrypted plaintexts **never enter
+the Rimu evaluator** — plans reference secrets by name (agenix-style), and
+the plaintext is materialised onto the target filesystem at apply time by
+`@core/secret`:
 
-- Decryption is **eager** — every `*.age` file is decrypted up-front so the
-  [`Redactor`](./secrets/src/lib.rs) has a complete table regardless of which
-  secrets a given plan happens to touch.
-- Plaintexts live in `Secret = Arc<SecretBox<String>>` (the `secrecy` crate).
-  Don't clone them into plain `String` fields on long-lived types; don't log
-  them via structured fields.
-- **Missing secret** (`ctx.secrets.<name>` where `<name>` wasn't loaded) is
-  `Null` rather than a validation error — typos silently propagate. Live
-  with it for now; see `Note(cc)` in `plan/src/eval.rs`.
+```
+- module: "@core/secret"
+  params:
+    name: "hello"                              # -> secrets/hello.age
+    path: ctx.system.user.home + "/hello.txt"
+```
+
+Under the hood `@core/secret` delegates to `@core/file`'s state/change/
+operation machinery; the only differences are that it references the
+plaintext by name (resolved against [`Context::secrets`](./ctx/src/lib.rs)
+at apply time) and defaults `mode` to `0o600`. The secrets bundle is put
+on `Context` in `lusid-apply` after decryption, and the
+`FileSource::Secret(name)` operation variant is resolved to plaintext just
+before the atomic write.
+
+Invariants:
+
+- Decryption is **eager** — every `*.age` file is decrypted up-front so
+  the [`Redactor`](./secrets/src/lib.rs) has a complete table regardless
+  of which secrets a given plan happens to touch.
+- Plaintexts live in `Secret = Arc<SecretBox<String>>` (the `secrecy`
+  crate). Don't clone them into plain `String` fields on long-lived types;
+  don't log them via structured fields.
+- **Missing secret** (a `name:` field that doesn't match any decrypted
+  secret) errors at state/apply time with `MissingSecret` rather than
+  silently producing an empty file.
 - **Short secrets are not redacted.** `Secrets::redactor()` skips anything
   below `REDACT_MIN_LEN` (8) — substring-matching `"ab"` against arbitrary
   process output is worse than leaving it.
 - `dev apply` forwards secrets to the guest via **per-target
-  re-encryption**: the host decrypts with the operator identity, re-encrypts
-  each plaintext to the VM's ephemeral SSH keypair, and ships the
-  ciphertexts + that keypair (as the guest's age identity) over SFTP. The
-  operator identity never leaves the host. See `reencrypt_for_machine` in
-  `secrets/src/lib.rs` and the `cmd_dev_apply` wiring in `lusid/src/lib.rs`.
-  `remote apply` is still `todo!()`; it is expected to follow the same
-  shape using a machine's declared `[machines]` SSH key.
+  re-encryption**: the host decrypts with the operator identity,
+  re-encrypts each plaintext to the VM's ephemeral SSH keypair, and ships
+  the ciphertexts + that keypair (as the guest's age identity) over SFTP.
+  The operator identity never leaves the host. See `reencrypt_for_machine`
+  in `secrets/src/lib.rs` and the `cmd_dev_apply` wiring in
+  `lusid/src/lib.rs`. `remote apply` is still `todo!()`; it is expected to
+  follow the same shape using a machine's declared `[machines]` SSH key.
 
 
 ## Build / run / test (agent checklist)

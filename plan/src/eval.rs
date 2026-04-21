@@ -1,35 +1,15 @@
 //! Evaluate a plan's `setup(params, ctx)` Rimu function into a list of `PlanItem`s.
 //!
-//! `ctx` is a Rimu object of the form `{ system, secrets }`. Plans destructure
-//! it as `ctx.system.*` / `ctx.secrets.*`.
-//!
-//! Note(cc): `ctx.secrets.<name>` is `Null` when `<name>` is not loaded — not
-//! a validation error. This matches "no secret" ergonomically but means typos
-//! silently propagate. Partial mitigation: `ParamType::Secret` validation
-//! (see `ValidateValueError::NullSecret` in `params/src/lib.rs`) catches the
-//! common case where a Null flows directly into a Secret-typed field. The
-//! full fix would be to type `ctx.secrets` as a strict map that errors at
-//! access time — this needs Rimu support (a `Value::Secrets`-like container
-//! or a per-object lookup hook) and is deferred.
-//!
-//! Note(cc): secrets are handed to Rimu inside a [`Value::Tagged`] wrapper (tag
-//! [`TAG_SECRET`]) so the typed identity survives `+` concatenation and other
-//! arithmetic — Rimu propagates the tag through unary/binary operators, which
-//! means `"prefix " + ctx.secrets.foo` still arrives at a downstream resource
-//! as a tagged secret string. The inner plaintext remains an ordinary `String`
-//! during Rimu evaluation, so intermediate copies Rimu makes (e.g. function
-//! args, object construction) still live outside the `SecretBox` envelope and
-//! are not zeroised on drop. agenix / sops-nix avoid this entirely by passing
-//! filenames through the evaluator and materialising secret contents at
-//! activation. See `lusid_params::Secret`'s doc for the wider context.
+//! `ctx` is a Rimu object of the form `{ system }`. Plans destructure it as
+//! `ctx.system.*`. Secret plaintexts never enter the Rimu evaluator — plans
+//! reference secrets by name through `@core/secret`, and the plaintext is
+//! materialised at apply time (agenix-style).
 
 use displaydoc::Display;
-use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct, TAG_SECRET};
-use lusid_secrets::Secrets;
+use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};
 use lusid_system::System;
 use rimu::{SourceId, Span, Spanned, Value, ValueObject, call};
 use rimu_interop::{FromRimu, to_rimu};
-use secrecy::ExposeSecret;
 use thiserror::Error;
 
 use crate::model::{IntoPlanItemError, PlanItem, SetupFunction};
@@ -56,7 +36,7 @@ pub enum EvalError {
 /// into [`PlanItem`]s.
 ///
 /// `ctx` is synthesised here as a Rimu object bundling runtime inputs the plan can
-/// destructure — `{ system, secrets }`.
+/// destructure — `{ system }`.
 ///
 /// `params_value` is `None` when the caller provided no params — in that case the first
 /// arg is `Null` (rather than e.g. an empty object, to match what a plan's `setup` sees
@@ -66,7 +46,6 @@ pub(crate) fn evaluate(
     params_value: Option<Spanned<Value>>,
     params_struct: Option<ParamsStruct>,
     system: &System,
-    secrets: &Secrets,
 ) -> Result<Vec<Spanned<PlanItem>>, EvalError> {
     let (setup, setup_span) = setup.take();
 
@@ -74,27 +53,9 @@ pub(crate) fn evaluate(
 
     let system_value = to_rimu(system, SourceId::empty())?;
 
-    let secrets_value = {
-        let mut map: ValueObject = Default::default();
-        for (name, secret) in secrets.iter() {
-            let inner = Spanned::new(
-                Value::String(secret.expose_secret().clone()),
-                empty_span.clone(),
-            );
-            let tagged = Value::Tagged {
-                tag: TAG_SECRET.to_string(),
-                inner: Box::new(inner),
-                meta: Default::default(),
-            };
-            map.insert(name.to_string(), Spanned::new(tagged, empty_span.clone()));
-        }
-        Spanned::new(Value::Object(map), empty_span.clone())
-    };
-
     let ctx_value = {
         let mut map: ValueObject = Default::default();
         map.insert("system".to_string(), system_value);
-        map.insert("secrets".to_string(), secrets_value);
         Spanned::new(Value::Object(map), empty_span.clone())
     };
 

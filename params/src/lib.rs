@@ -28,7 +28,6 @@
 //! so authors should order from most-specific to most-general.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use displaydoc::Display;
 use indexmap::IndexMap;
@@ -37,7 +36,6 @@ use rimu::{
     from_serde_value,
 };
 use rimu_interop::{FromRimu, ToRimuError};
-use secrecy::{ExposeSecret, SecretBox};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
 
@@ -49,36 +47,6 @@ pub const TAG_HOST_PATH: &str = "host-path";
 /// into Rimu. See [`TAG_HOST_PATH`].
 pub const TAG_TARGET_PATH: &str = "target-path";
 
-/// Tag applied to [`Value::Tagged`] when a [`ParamValue::Secret`] crosses into
-/// Rimu. Rimu's tagged-value arithmetic propagates this tag through `+`
-/// concatenation, so a plan that writes `"prefix " + ctx.secrets.foo` produces
-/// a value that downstream resource params can still identify as secret.
-pub const TAG_SECRET: &str = "secret";
-
-/// A secret plaintext string. Wrapped in [`Arc`] so `ParamValue::Clone` stays
-/// cheap, and in [`SecretBox<String>`] so `Debug` is redacted and the plaintext
-/// is zeroised when the last clone drops.
-///
-/// `SecretBox<String>` (rather than `secrecy::SecretString`, a.k.a. `SecretBox<str>`)
-/// is used because only the sized form implements `serde::Deserialize`, which is
-/// needed so resource param structs can deserialise a secret field.
-///
-/// Note(cc): the [`Secret`] wrapper protects the plaintext at the boundaries,
-/// but the plan evaluator hands secrets to Rimu inside a [`Value::Tagged`]
-/// wrapper whose inner is a plain [`Value::String`] (see
-/// [`ParamValue::into_rimu`] below, and `secrets_value` in `plan/src/eval.rs`).
-/// Rimu propagates the tag through arithmetic, so
-/// `"prefix " + ctx.secrets.foo` still lands on the resource side as a tagged
-/// secret string — that preserves provenance well enough to re-validate
-/// against a `secret` param type and to extend redaction to the concatenated
-/// form. The inner plaintext is still an ordinary `String` during Rimu
-/// evaluation, so copies made by function calls and object construction remain
-/// outside the `SecretBox` envelope and are not zeroised. agenix / sops-nix
-/// sidestep this by materialising secrets at activation time and passing
-/// filenames through the evaluator instead of values — revisit if
-/// plaintext-in-evaluator ever becomes load-bearing.
-pub type Secret = Arc<SecretBox<String>>;
-
 /// Schema node: the allowed shape of a single value.
 ///
 /// - `Literal` matches an exact Rimu value (used to discriminate union cases on a
@@ -87,9 +55,6 @@ pub type Secret = Arc<SecretBox<String>>;
 ///   the inner type.
 /// - `HostPath` / `TargetPath` are `String` at the Rimu level but carry stricter
 ///   semantics (relative vs absolute; see module docs).
-/// - `Secret` is `String` at the Rimu level, but materialises into a
-///   [`ParamValue::Secret`] so downstream code holds a redacted-on-Debug
-///   [`SecretString`] rather than plaintext.
 #[derive(Debug, Clone)]
 pub enum ParamType {
     Literal(Value),
@@ -100,7 +65,6 @@ pub enum ParamType {
     Object { value: Box<Spanned<ParamType>> },
     HostPath,
     TargetPath,
-    Secret,
 }
 
 #[derive(Debug, Clone)]
@@ -152,9 +116,6 @@ pub enum ParamTypes {
 /// Mirrors [`ParamType`] variants but holds a concrete value. Notably,
 /// `HostPath` becomes a fully-resolved absolute [`PathBuf`], so downstream
 /// consumers never need to know where the source file lived.
-///
-/// `Secret` wraps its plaintext in a [`Secret`] (an `Arc<SecretBox<String>>`) so
-/// clones are cheap and `Debug` stays redacted.
 #[derive(Debug, Clone)]
 pub enum ParamValue {
     Literal(Value),
@@ -165,11 +126,10 @@ pub enum ParamValue {
     Object(IndexMap<String, Spanned<ParamValue>>),
     HostPath(PathBuf),
     TargetPath(String),
-    Secret(Secret),
 }
 
 impl ParamValue {
-    /// Convert into a Rimu value, wrapping `HostPath`/`TargetPath`/`Secret` in a
+    /// Convert into a Rimu value, wrapping `HostPath`/`TargetPath` in a
     /// [`Value::Tagged`] so the typed identity survives Rimu evaluation (including
     /// `+` concatenation — Rimu propagates tags through unary/binary ops). Use
     /// this when values are about to flow into the evaluator (plan `setup` args,
@@ -209,18 +169,13 @@ impl ParamValue {
                 span,
             ),
             ParamValue::TargetPath(path) => tagged(TAG_TARGET_PATH, Value::String(path), span),
-            ParamValue::Secret(secret) => tagged(
-                TAG_SECRET,
-                Value::String(secret.expose_secret().to_owned()),
-                span,
-            ),
         }
     }
 
-    /// Convert into a Rimu value with `HostPath`/`TargetPath`/`Secret` flattened
-    /// to plain `Value::String`. Used on the serde-deserialize path
+    /// Convert into a Rimu value with `HostPath`/`TargetPath` flattened to
+    /// plain `Value::String`. Used on the serde-deserialize path
     /// ([`ParamValues::into_type`]) because [`SerdeValue::Tagged`] doesn't
-    /// unwrap into primitive target types like `String` or `SecretBox<String>`.
+    /// unwrap into primitive target types like `String`.
     pub fn into_untagged_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
         let (inner, span) = value.take();
         Spanned::new(inner.into_untagged_rimu(), span)
@@ -248,7 +203,6 @@ impl ParamValue {
             }
             ParamValue::HostPath(path) => Value::String(path.to_string_lossy().into_owned()),
             ParamValue::TargetPath(path) => Value::String(path),
-            ParamValue::Secret(secret) => Value::String(secret.expose_secret().to_owned()),
         }
     }
 }
@@ -385,20 +339,6 @@ impl ParamValue {
                     Value::String(value) => Ok(ParamValue::TargetPath(value)),
                     inner => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
                         typ: Box::new(ParamType::TargetPath),
-                        value: Box::new(inner),
-                    }),
-                }
-            }
-            (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Arc::new(
-                SecretBox::new(Box::new(value)),
-            ))),
-            (ParamType::Secret, Value::Tagged { tag, inner, .. }) if tag == TAG_SECRET => {
-                match inner.into_inner() {
-                    Value::String(value) => Ok(ParamValue::Secret(Arc::new(SecretBox::new(
-                        Box::new(value),
-                    )))),
-                    inner => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
-                        typ: Box::new(ParamType::Secret),
                         value: Box::new(inner),
                     }),
                 }
@@ -578,7 +518,6 @@ impl FromRimu for ParamType {
             "number" => Ok(ParamType::Number),
             "host-path" => Ok(ParamType::HostPath),
             "target-path" => Ok(ParamType::TargetPath),
-            "secret" => Ok(ParamType::Secret),
             "list" => {
                 let item = object
                     .swap_remove("item")
@@ -744,18 +683,6 @@ pub enum ValidateValueError {
         #[source]
         error: Box<ValidateValueError>,
     },
-
-    /// Expected a secret string, got Null — check that `ctx.secrets.<name>` matches an existing `<name>.age` file
-    //
-    // Note(cc): This is a partial mitigation for typos in `ctx.secrets.<name>`
-    // references. It only fires when the Null flows directly into a
-    // `ParamType::Secret` field. A Null that gets used in e.g. string
-    // concatenation or passed to a non-Secret param won't be caught here —
-    // see the `Note(cc)` in `plan/src/eval.rs` for the full fix (strict
-    // `ctx.secrets` map that errors at access time, which needs Rimu support).
-    NullSecret {
-        expected_type: Box<Spanned<ParamType>>,
-    },
 }
 
 #[derive(Debug, Clone, Error, Display)]
@@ -862,23 +789,6 @@ fn validate_type(
             {
                 Ok(())
             }
-            _ => Err(mismatch(param_type, value)),
-        },
-
-        ParamType::Secret => match value_inner {
-            // Note(cc): empty-string secrets pass — a secret file can legitimately
-            // contain an empty plaintext (rare, but not impossible). If we ever want
-            // to reject this, do it here with a dedicated error variant rather than
-            // reusing `NullSecret` (which speaks specifically about typo-on-lookup).
-            Value::String(_) => Ok(()),
-            Value::Tagged { tag, inner, .. }
-                if tag == TAG_SECRET && matches!(inner.inner(), Value::String(_)) =>
-            {
-                Ok(())
-            }
-            Value::Null => Err(ValidateValueError::NullSecret {
-                expected_type: Box::new(param_type.clone()),
-            }),
             _ => Err(mismatch(param_type, value)),
         },
 

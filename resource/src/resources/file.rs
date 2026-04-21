@@ -9,7 +9,7 @@ use lusid_operation::{
     Operation,
     operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes, Secret};
+use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
 use secrecy::ExposeSecret;
@@ -18,15 +18,11 @@ use thiserror::Error;
 
 use crate::ResourceType;
 
-// Note(cc): `FileParams::Contents` accepts a `Secret` `contents` but doesn't
-// tighten any of the ownership fields — `mode`/`user`/`group` are all
-// `Option` and default to whatever the filesystem hands out (usually 0644,
-// current user). Plan authors who want stricter defaults should prefer
-// `@core/secret`, which delegates to this module's machinery but forces
-// `mode` to default to `0o600`. Deliberately not tightening this variant
-// itself: `@core/file` with `type: "contents"` has legitimate non-secret
-// uses (rendering a rendered config, writing a readme, etc.) where 0644 is
-// the right default. See `resource/src/resources/secret.rs`.
+// `FileParams::Contents` is for non-secret inline content (rendered config,
+// readme, etc.). Plans that need secret contents should use `@core/secret`,
+// which delegates to this module's machinery but references the secret by
+// name and forces `mode` to default to `0o600`. See
+// `resource/src/resources/secret.rs`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum FileParams {
@@ -38,7 +34,7 @@ pub enum FileParams {
         group: Option<FileGroup>,
     },
     Contents {
-        contents: Secret,
+        contents: String,
         path: FilePath,
         mode: Option<FileMode>,
         user: Option<FileUser>,
@@ -72,13 +68,39 @@ impl_display_render!(FileParams);
 
 #[derive(Debug, Clone)]
 pub enum FileResource {
-    Sourced { source: FilePath, path: FilePath },
-    Contents { contents: Secret, path: FilePath },
-    Present { path: FilePath },
-    Absent { path: FilePath },
-    Mode { path: FilePath, mode: FileMode },
-    User { path: FilePath, user: FileUser },
-    Group { path: FilePath, group: FileGroup },
+    Sourced {
+        source: FilePath,
+        path: FilePath,
+    },
+    Contents {
+        contents: String,
+        path: FilePath,
+    },
+    /// Contents sourced from a decrypted secret by name; resolved against
+    /// [`Context::secrets`] at state/apply time so plaintext never travels
+    /// through the resource/change tree. See `@core/secret`.
+    SecretContents {
+        name: String,
+        path: FilePath,
+    },
+    Present {
+        path: FilePath,
+    },
+    Absent {
+        path: FilePath,
+    },
+    Mode {
+        path: FilePath,
+        mode: FileMode,
+    },
+    User {
+        path: FilePath,
+        user: FileUser,
+    },
+    Group {
+        path: FilePath,
+        group: FileGroup,
+    },
 }
 
 impl Display for FileResource {
@@ -87,8 +109,11 @@ impl Display for FileResource {
             FileResource::Sourced { source, path } => {
                 write!(f, "FileSourced({source} -> {path})")
             }
-            FileResource::Contents { path, .. } => {
-                write!(f, "FileContents(<redacted> -> {path})")
+            FileResource::Contents { contents, path } => {
+                write!(f, "FileContents({} bytes -> {path})", contents.len())
+            }
+            FileResource::SecretContents { name, path } => {
+                write!(f, "FileSecretContents(secret = {name} -> {path})")
             }
             FileResource::Present { path } => write!(f, "FilePresent({path})"),
             FileResource::Absent { path } => write!(f, "FileAbsent({path})"),
@@ -140,6 +165,11 @@ impl_display_render!(FileState);
 pub enum FileStateError {
     #[error(transparent)]
     Fs(#[from] FsError),
+
+    #[error(
+        "secret {name:?} referenced by file resource was not found in decrypted secrets bundle"
+    )]
+    MissingSecret { name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -177,6 +207,9 @@ impl Display for FileChange {
                     "File::Write(path = {}, source = Path({}))",
                     path, source_path
                 ),
+                FileSource::Secret(name) => {
+                    write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
+                }
             },
             FileChange::Remove { path } => write!(f, "File::Remove(path = {path})"),
             FileChange::ChangeMode { path, mode } => {
@@ -221,7 +254,7 @@ impl ResourceType for File {
                 },
                 indexmap! {
                   "state".to_string() => field(ParamType::Literal("contents".into()), true),
-                  "contents".to_string() => field(ParamType::Secret, true),
+                  "contents".to_string() => field(ParamType::String, true),
                   "path".to_string() => field(ParamType::TargetPath, true),
                   "mode".to_string() => field(ParamType::Number, false),
                   "user".to_string() => field(ParamType::String, false),
@@ -390,7 +423,7 @@ impl ResourceType for File {
     type StateError = FileStateError;
 
     async fn state(
-        _ctx: &mut Context,
+        ctx: &mut Context,
         resource: &Self::Resource,
     ) -> Result<Self::State, Self::StateError> {
         let state = match resource {
@@ -413,7 +446,28 @@ impl ResourceType for File {
                     FileState::NotSourced
                 } else {
                     let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
-                    if path_contents.as_slice() == contents.expose_secret().as_bytes() {
+                    if path_contents.as_slice() == contents.as_bytes() {
+                        FileState::Sourced
+                    } else {
+                        FileState::NotSourced
+                    }
+                }
+            }
+
+            FileResource::SecretContents { name, path } => {
+                if !fs::path_exists(path.as_path()).await? {
+                    FileState::NotSourced
+                } else {
+                    // Compare the file's current contents against the
+                    // decrypted secret plaintext. A missing secret here
+                    // (e.g. typo in the plan's `name` field) surfaces as
+                    // `MissingSecret` rather than a silent NotSourced.
+                    let secret = ctx
+                        .secrets()
+                        .get(name)
+                        .ok_or_else(|| FileStateError::MissingSecret { name: name.clone() })?;
+                    let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
+                    if path_contents.as_slice() == secret.expose_secret().as_bytes() {
                         FileState::Sourced
                     } else {
                         FileState::NotSourced
@@ -491,11 +545,20 @@ impl ResourceType for File {
             (FileResource::Contents { contents, path }, FileState::NotSourced) => {
                 Some(FileChange::Write {
                     path: path.clone(),
-                    source: FileSource::Contents(contents.expose_secret().as_bytes().to_vec()),
+                    source: FileSource::Contents(contents.as_bytes().to_vec()),
                 })
             }
 
             (FileResource::Contents { .. }, FileState::Sourced) => None,
+
+            (FileResource::SecretContents { name, path }, FileState::NotSourced) => {
+                Some(FileChange::Write {
+                    path: path.clone(),
+                    source: FileSource::Secret(name.clone()),
+                })
+            }
+
+            (FileResource::SecretContents { .. }, FileState::Sourced) => None,
 
             (FileResource::Present { path }, FileState::Absent) => Some(FileChange::Write {
                 path: path.clone(),
