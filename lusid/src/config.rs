@@ -58,17 +58,11 @@ struct ConfigToml {
     pub log: Option<String>,
     pub lusid_apply_linux_x86_64_path: Option<String>,
     pub lusid_apply_linux_aarch64_path: Option<String>,
-    pub identity: Option<PathBuf>,
-    pub secrets_dir: Option<PathBuf>,
 }
 
 /// Resolved configuration. `path` is the original config file location
 /// (used to derive `root()`, the plan-resolution base). `machines` map is
 /// keyed by the TOML section name.
-///
-/// `identity_path` and `secrets_dir` are resolved to absolute paths
-/// (relative config entries are resolved against the config file's
-/// directory — same base as plan paths).
 #[derive(Debug, Clone)]
 pub struct Config {
     pub path: PathBuf,
@@ -76,8 +70,6 @@ pub struct Config {
     pub log: String,
     pub lusid_apply_linux_x86_64_path: String,
     pub lusid_apply_linux_aarch64_path: String,
-    pub identity_path: Option<PathBuf>,
-    pub secrets_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -106,8 +98,6 @@ impl Config {
             log,
             lusid_apply_linux_x86_64_path,
             lusid_apply_linux_aarch64_path,
-            identity,
-            secrets_dir,
         } = config;
 
         let machines = Self::resolve_machines(machines, path)?;
@@ -125,25 +115,12 @@ impl Config {
             .or(lusid_apply_linux_aarch64_path.clone())
             .unwrap_or("lusid-apply-linux-aarch64".into());
 
-        let identity_path = cli
-            .identity_path
-            .clone()
-            .or(identity)
-            .map(|p| Self::resolve_relative_path(path, &p));
-        let secrets_dir = cli
-            .secrets_dir
-            .clone()
-            .or(secrets_dir)
-            .map(|p| Self::resolve_relative_path(path, &p));
-
         Ok(Config {
             path: path.to_owned(),
             machines,
             log,
             lusid_apply_linux_x86_64_path,
             lusid_apply_linux_aarch64_path,
-            identity_path,
-            secrets_dir,
         })
     }
 
@@ -258,21 +235,6 @@ impl Config {
                     base_path: base_path.to_owned(),
                     plan_path: plan_path.to_owned(),
                 })
-        }
-    }
-
-    /// Resolve a relative path against the config file's parent directory.
-    /// Absolute paths are returned unchanged. For a config at a filesystem
-    /// root with no parent, we fall back to the path as-is — relative
-    /// paths are effectively treated as CWD-relative in that edge case.
-    fn resolve_relative_path(base_path: &Path, rel_path: &Path) -> PathBuf {
-        if rel_path.is_absolute() {
-            rel_path.to_path_buf()
-        } else {
-            base_path
-                .parent()
-                .map(|parent| parent.join(rel_path))
-                .unwrap_or_else(|| rel_path.to_path_buf())
         }
     }
 }

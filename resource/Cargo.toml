@@ -15,7 +15,6 @@ async-trait.workspace = true
 futures-util = "0.3.31"
 indexmap.workspace = true
 rimu.workspace = true
-secrecy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

@@ -9,36 +9,19 @@ use lusid_operation::{
     Operation,
     operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes, Secret};
+use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use secrecy::ExposeSecret;
 use serde::Deserialize;
 use thiserror::Error;
 
 use crate::ResourceType;
 
-// Note(cc): `FileParams::Contents` accepts a `Secret` `contents` but doesn't
-// tighten any of the ownership fields — `mode`/`user`/`group` are all
-// `Option` and default to whatever the filesystem hands out (usually 0644,
-// current user). Plan authors who want stricter defaults should prefer
-// `@core/secret`, which delegates to this module's machinery but forces
-// `mode` to default to `0o600`. Deliberately not tightening this variant
-// itself: `@core/file` with `type: "contents"` has legitimate non-secret
-// uses (rendering a rendered config, writing a readme, etc.) where 0644 is
-// the right default. See `resource/src/resources/secret.rs`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "state", rename_all = "kebab-case")]
 pub enum FileParams {
     Sourced {
         source: FilePath,
-        path: FilePath,
-        mode: Option<FileMode>,
-        user: Option<FileUser>,
-        group: Option<FileGroup>,
-    },
-    Contents {
-        contents: Secret,
         path: FilePath,
         mode: Option<FileMode>,
         user: Option<FileUser>,
@@ -61,7 +44,6 @@ impl Display for FileParams {
             FileParams::Sourced { source, path, .. } => {
                 write!(f, "File::Sourced(source = {source}, path = {path})")
             }
-            FileParams::Contents { path, .. } => write!(f, "File::Contents(path = {path})"),
             FileParams::Present { path, .. } => write!(f, "File::Present(path = {path})"),
             FileParams::Absent { path } => write!(f, "File::Absent(path = {path})"),
         }
@@ -73,7 +55,6 @@ impl_display_render!(FileParams);
 #[derive(Debug, Clone)]
 pub enum FileResource {
     Sourced { source: FilePath, path: FilePath },
-    Contents { contents: Secret, path: FilePath },
     Present { path: FilePath },
     Absent { path: FilePath },
     Mode { path: FilePath, mode: FileMode },
@@ -86,9 +67,6 @@ impl Display for FileResource {
         match self {
             FileResource::Sourced { source, path } => {
                 write!(f, "FileSourced({source} -> {path})")
-            }
-            FileResource::Contents { path, .. } => {
-                write!(f, "FileContents(<redacted> -> {path})")
             }
             FileResource::Present { path } => write!(f, "FilePresent({path})"),
             FileResource::Absent { path } => write!(f, "FileAbsent({path})"),
@@ -220,14 +198,6 @@ impl ResourceType for File {
                   "group".to_string() => field(ParamType::String, false),
                 },
                 indexmap! {
-                  "state".to_string() => field(ParamType::Literal("contents".into()), true),
-                  "contents".to_string() => field(ParamType::Secret, true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                  "mode".to_string() => field(ParamType::Number, false),
-                  "user".to_string() => field(ParamType::String, false),
-                  "group".to_string() => field(ParamType::String, false),
-                },
-                indexmap! {
                   "state".to_string() => field(ParamType::Literal("present".into()), true),
                   "path".to_string() => field(ParamType::TargetPath, true),
                   "mode".to_string() => field(ParamType::Number, false),
@@ -259,51 +229,6 @@ impl ResourceType for File {
                     CausalityMeta::id("file".into()),
                     FileResource::Sourced {
                         source,
-                        path: path.clone(),
-                    },
-                )];
-
-                if let Some(mode) = mode {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::Mode {
-                            path: path.clone(),
-                            mode,
-                        },
-                    ));
-                }
-
-                if let Some(user) = user {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::User {
-                            path: path.clone(),
-                            user,
-                        },
-                    ))
-                }
-
-                if let Some(group) = group {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::Group { path, group },
-                    ));
-                }
-
-                nodes
-            }
-
-            FileParams::Contents {
-                contents,
-                path,
-                mode,
-                user,
-                group,
-            } => {
-                let mut nodes = vec![CausalityTree::leaf(
-                    CausalityMeta::id("file".into()),
-                    FileResource::Contents {
-                        contents,
                         path: path.clone(),
                     },
                 )];
@@ -408,19 +333,6 @@ impl ResourceType for File {
                 }
             }
 
-            FileResource::Contents { contents, path } => {
-                if !fs::path_exists(path.as_path()).await? {
-                    FileState::NotSourced
-                } else {
-                    let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
-                    if path_contents.as_slice() == contents.expose_secret().as_bytes() {
-                        FileState::Sourced
-                    } else {
-                        FileState::NotSourced
-                    }
-                }
-            }
-
             FileResource::Present { path } | FileResource::Absent { path } => {
                 if fs::path_exists(path.as_path()).await? {
                     FileState::Present
@@ -487,15 +399,6 @@ impl ResourceType for File {
             }
 
             (FileResource::Sourced { .. }, FileState::Sourced) => None,
-
-            (FileResource::Contents { contents, path }, FileState::NotSourced) => {
-                Some(FileChange::Write {
-                    path: path.clone(),
-                    source: FileSource::Contents(contents.expose_secret().as_bytes().to_vec()),
-                })
-            }
-
-            (FileResource::Contents { .. }, FileState::Sourced) => None,
 
             (FileResource::Present { path }, FileState::Absent) => Some(FileChange::Write {
                 path: path.clone(),

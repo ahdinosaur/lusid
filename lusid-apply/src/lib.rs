@@ -41,7 +41,6 @@ use lusid_plan::{
     self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
-use lusid_secrets::{DecryptError, Identity, IdentityError, Secrets, decrypt_dir};
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
@@ -55,18 +54,10 @@ use tracing::{debug, error, info};
 /// Inputs for [`apply`]. `root_path` is the lusid working-dir root passed to
 /// [`Context::create`]; `plan_id` selects a plan; `params_json` is an
 /// optional JSON object (validated against the plan's params schema).
-///
-/// Secrets: when `identity_path` is provided, every `*.age` file under
-/// `secrets_dir` is eagerly decrypted and exposed to plans via
-/// `ctx.secrets.*`. When `identity_path` is `None`, plans see an empty
-/// `ctx.secrets` regardless of `secrets_dir` — i.e. no identity means no
-/// decryption is even attempted.
 pub struct ApplyOptions {
     pub root_path: PathBuf,
     pub plan_id: PlanId,
     pub params_json: Option<String>,
-    pub identity_path: Option<PathBuf>,
-    pub secrets_dir: Option<PathBuf>,
 }
 
 #[derive(Error, Debug)]
@@ -106,12 +97,6 @@ pub enum ApplyError {
 
     #[error(transparent)]
     OperationApply(#[from] OperationApplyError),
-
-    #[error("failed to load age identity: {0}")]
-    Identity(#[from] IdentityError),
-
-    #[error("failed to decrypt secrets: {0}")]
-    Decrypt(#[from] DecryptError),
 }
 
 /// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it
@@ -125,34 +110,11 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         root_path,
         plan_id,
         params_json,
-        identity_path,
-        secrets_dir,
     } = options;
 
     let mut ctx = Context::create(&root_path)?;
     let mut store = Store::new(ctx.paths().cache_dir());
     let system = System::get().await?;
-
-    // Load + decrypt secrets, if an identity was provided. Without an
-    // identity we skip decryption entirely — plans see `ctx.secrets` as an
-    // empty object. We eagerly decrypt so the redaction table is complete
-    // regardless of which secrets any particular plan happens to touch.
-    let secrets = match identity_path.as_deref() {
-        None => {
-            info!("no identity provided; ctx.secrets will be empty");
-            Secrets::empty()
-        }
-        Some(identity_path) => {
-            let identity = Identity::from_file(identity_path).await?;
-            let dir = secrets_dir.unwrap_or_else(|| root_path.join("secrets"));
-            let secrets = decrypt_dir(&identity, &dir).await?;
-            info!(count = secrets.len(), "loaded secrets");
-            secrets
-        }
-    };
-    // Built once up-front; applied to every per-operation stdout/stderr
-    // line before emit. Best-effort — see `Redactor` docs for caveats.
-    let redactor = secrets.redactor();
 
     info!(plan = %plan_id, "using plan");
 
@@ -170,7 +132,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     };
 
     // Parse/evaluate to tree of resource params.
-    let resource_params = plan(plan_id, param_values, &mut store, &system, &secrets).await?;
+    let resource_params = plan(plan_id, param_values, &mut store, &system).await?;
     debug!("Resource params: {resource_params:?}");
     emit(AppUpdate::ResourceParams {
         resource_params: render_plan_tree(resource_params.clone()),
@@ -308,7 +270,6 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
             let stdout_task = {
                 let mut lines = BufReader::new(stdout).lines();
-                let redactor = redactor.clone();
                 async move {
                     while let Some(line) = lines
                         .next_line()
@@ -317,7 +278,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
                     {
                         emit(AppUpdate::OperationApplyStdout {
                             index,
-                            stdout: redactor.redact(&line),
+                            stdout: line,
                         })
                         .await?;
                     }
@@ -327,7 +288,6 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
             let stderr_task = {
                 let mut lines = BufReader::new(stderr).lines();
-                let redactor = redactor.clone();
                 async move {
                     while let Some(line) = lines
                         .next_line()
@@ -336,7 +296,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
                     {
                         emit(AppUpdate::OperationApplyStderr {
                             index,
-                            stderr: redactor.redact(&line),
+                            stderr: line,
                         })
                         .await?;
                     }

@@ -6,7 +6,7 @@ use lusid_params::{ParamValues, validate};
 use lusid_resource::{
     ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command,
     directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, podman::Podman,
-    secret::Secret, systemd::Systemd, user::User,
+    systemd::Systemd, user::User,
 };
 use rimu::{Spanned, Value};
 
@@ -35,7 +35,6 @@ pub fn core_module(
         Podman::ID => core_module_for_resource::<Podman>(params).map(ResourceParams::Podman),
         Command::ID => core_module_for_resource::<Command>(params).map(ResourceParams::Command),
         Git::ID => core_module_for_resource::<Git>(params).map(ResourceParams::Git),
-        Secret::ID => core_module_for_resource::<Secret>(params).map(ResourceParams::Secret),
         Systemd::ID => core_module_for_resource::<Systemd>(params).map(ResourceParams::Systemd),
         User::ID => core_module_for_resource::<User>(params).map(ResourceParams::User),
         Group::ID => core_module_for_resource::<Group>(params).map(ResourceParams::Group),
