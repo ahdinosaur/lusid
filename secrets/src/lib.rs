@@ -12,6 +12,8 @@
 //! apply-time [`Secrets`] bundle plus [`decrypt_dir`] / [`alias_for_identity`].
 //! The CLI lands in a later phase.
 
+mod check;
+pub mod cli;
 mod crypto;
 mod identity;
 mod key;
@@ -26,6 +28,7 @@ use secrecy::{ExposeSecret, SecretBox};
 use thiserror::Error;
 use tokio::fs;
 
+pub use crate::check::{CheckError, CheckReport, DriftReason, DriftedFile, ReadError};
 pub use crate::crypto::{
     DecryptError, EncryptError, HeaderError, decrypt_bytes, encrypt_bytes, read_header_stanzas,
 };
@@ -33,6 +36,7 @@ pub use crate::identity::{Identity, IdentityError};
 pub use crate::key::{Key, KeyParseError};
 pub use crate::recipients::{
     FileEntry, Recipients, RecipientsError, ResolveError, ResolvedRecipient, SECRETS_FILE,
+    to_boxed_recipients,
 };
 
 /// Decrypted secret plaintext. Wrapped in [`Arc`] so cloning (e.g. into a

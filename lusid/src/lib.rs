@@ -25,6 +25,7 @@ use clap::{Parser, Subcommand};
 use lusid_apply_stdio::AppViewError;
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
+use lusid_secrets::cli::{CliEnv as SecretsCliEnv, CliError as SecretsCliError, SecretsCommand};
 use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshVolume};
 use lusid_vm::{Vm, VmError, VmOptions};
 use thiserror::Error;
@@ -59,6 +60,17 @@ pub struct Cli {
 
     #[arg(env = "LUSID_APPLY_LINUX_AARCH64", global = true)]
     pub lusid_apply_linux_aarch64_path: Option<String>,
+
+    /// Override `<root>/secrets` as the secrets directory (location of
+    /// `lusid-secrets.toml` and `*.age` ciphertexts).
+    #[arg(long = "secrets-dir", env = "LUSID_SECRETS_DIR", global = true)]
+    pub secrets_dir: Option<PathBuf>,
+
+    /// Path to an age identity file. Required by `local apply`,
+    /// `secrets cat`, `secrets edit`, and `secrets rekey`; ignored by
+    /// `secrets ls`, `secrets check`, and `secrets keygen`.
+    #[arg(long = "identity", env = "LUSID_IDENTITY", global = true)]
+    pub identity: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -82,6 +94,11 @@ pub enum Cmd {
     Dev {
         #[command(subcommand)]
         command: DevCmd,
+    },
+    #[doc = " Manage age-encrypted project secrets"]
+    Secrets {
+        #[command(subcommand)]
+        command: SecretsCommand,
     },
 }
 
@@ -162,6 +179,9 @@ pub enum AppError {
 
     #[error(transparent)]
     Tui(#[from] TuiError),
+
+    #[error(transparent)]
+    Secrets(#[from] SecretsCliError),
 }
 
 /// Resolve the config path (CLI flag → `LUSID_CONFIG` env → CWD → `.`) and
@@ -179,12 +199,14 @@ pub async fn get_config(cli: &Cli) -> Result<Config, AppError> {
 
 /// Dispatch on the parsed subcommand.
 pub async fn run(cli: Cli, config: Config) -> Result<(), AppError> {
+    let secrets_dir = resolve_secrets_dir(&cli, &config);
+    let identity_path = cli.identity.clone();
     match cli.command {
         Cmd::Machines { command } => match command {
             MachinesCmd::List => cmd_machines_list(config).await,
         },
         Cmd::Local { command } => match command {
-            LocalCmd::Apply => cmd_local_apply(config).await,
+            LocalCmd::Apply => cmd_local_apply(config, secrets_dir, identity_path).await,
         },
         Cmd::Remote { command } => match command {
             RemoteCmd::Apply { machine_id } => cmd_remote_apply(config, machine_id).await,
@@ -194,7 +216,16 @@ pub async fn run(cli: Cli, config: Config) -> Result<(), AppError> {
             DevCmd::Apply { machine_id } => cmd_dev_apply(config, machine_id).await,
             DevCmd::Ssh { machine_id } => cmd_dev_ssh(config, machine_id).await,
         },
+        Cmd::Secrets { command } => cmd_secrets(command, secrets_dir, identity_path).await,
     }
+}
+
+/// CLI flag wins over `<root>/secrets` default. No `lusid.toml` field for
+/// this yet — add one only once a real project needs to override.
+fn resolve_secrets_dir(cli: &Cli, config: &Config) -> PathBuf {
+    cli.secrets_dir
+        .clone()
+        .unwrap_or_else(|| config.root().join("secrets"))
 }
 
 async fn cmd_machines_list(config: Config) -> Result<(), AppError> {
@@ -202,10 +233,27 @@ async fn cmd_machines_list(config: Config) -> Result<(), AppError> {
     Ok(())
 }
 
+async fn cmd_secrets(
+    command: SecretsCommand,
+    secrets_dir: PathBuf,
+    identity_path: Option<PathBuf>,
+) -> Result<(), AppError> {
+    let env = SecretsCliEnv {
+        secrets_dir,
+        identity_path,
+    };
+    lusid_secrets::cli::run(command, env).await?;
+    Ok(())
+}
+
 // Spawns `lusid-apply` as a subprocess and pipes its stdout + stderr into
 // the TUI. `Command::output` here returns streaming handles, not a finished
 // `std::process::Output` — naming is from `lusid_cmd`, not `std`.
-async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
+async fn cmd_local_apply(
+    config: Config,
+    secrets_dir: PathBuf,
+    identity_path: Option<PathBuf>,
+) -> Result<(), AppError> {
     let Config {
         ref lusid_apply_linux_x86_64_path,
         ..
@@ -216,7 +264,12 @@ async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
     command
         .args(["--root", &config.root().to_string_lossy()])
         .args(["--plan", &plan.to_string_lossy()])
-        .args(["--log", &config.log]);
+        .args(["--log", &config.log])
+        .args(["--secrets-dir", &secrets_dir.to_string_lossy()]);
+
+    if let Some(identity_path) = identity_path.as_deref() {
+        command.args(["--identity", &identity_path.to_string_lossy()]);
+    }
 
     if let Some(params) = params {
         let params_json = serde_json::to_string(&params)?;

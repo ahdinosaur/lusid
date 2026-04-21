@@ -262,6 +262,21 @@ pub struct ResolvedRecipient {
     pub key: Key,
 }
 
+/// Convert a resolved recipient list into the boxed form `age` expects for
+/// encryption. Cheap clones — both [`Key`] variants wrap small recipient
+/// types (a public point or an SSH pubkey).
+pub fn to_boxed_recipients(resolved: &[ResolvedRecipient]) -> Vec<Box<dyn age::Recipient + Send>> {
+    resolved
+        .iter()
+        .map(|r| -> Box<dyn age::Recipient + Send> {
+            match &r.key {
+                Key::X25519(k) => Box::new(k.clone()),
+                Key::Ssh(k) => Box::new(k.clone()),
+            }
+        })
+        .collect()
+}
+
 impl<'de> Deserialize<'de> for Key {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

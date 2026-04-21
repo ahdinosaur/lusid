@@ -2470,6 +2470,7 @@ dependencies = [
  "lusid-ctx",
  "lusid-machine",
  "lusid-params",
+ "lusid-secrets",
  "lusid-ssh",
  "lusid-store",
  "lusid-system",
@@ -2667,6 +2668,7 @@ version = "0.1.0"
 dependencies = [
  "age",
  "age-core",
+ "clap",
  "displaydoc",
  "indexmap",
  "secrecy",
