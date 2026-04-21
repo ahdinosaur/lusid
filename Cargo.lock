@@ -2663,9 +2663,12 @@ dependencies = [
  "age",
  "age-core",
  "displaydoc",
+ "indexmap",
  "secrecy",
+ "serde",
  "thiserror 2.0.18",
  "tokio",
+ "toml 0.9.8",
  "tracing",
 ]
 

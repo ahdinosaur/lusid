@@ -6,14 +6,14 @@
 //! Plaintexts never enter the Rimu evaluator — plans reference secrets by
 //! name, contents materialise at apply.
 //!
-//! This crate currently provides only the primitives: [`Identity`] for
-//! decryption, [`Key`] for recipient-side parsing, and byte-level
-//! [`encrypt_bytes`] / [`decrypt_bytes`]. Higher-level wiring (recipients
-//! config, apply-time `Secrets` bundle, CLI) lands in subsequent phases.
+//! This crate currently provides the primitives plus the
+//! `lusid-secrets.toml` recipients model. Higher-level wiring (apply-time
+//! `Secrets` bundle, CLI) lands in subsequent phases.
 
 mod crypto;
 mod identity;
 mod key;
+mod recipients;
 
 use std::sync::Arc;
 
@@ -24,6 +24,9 @@ pub use crate::crypto::{
 };
 pub use crate::identity::{Identity, IdentityError};
 pub use crate::key::{Key, KeyParseError};
+pub use crate::recipients::{
+    FileEntry, Recipients, RecipientsError, ResolveError, ResolvedRecipient, SECRETS_FILE,
+};
 
 /// Decrypted secret plaintext. Wrapped in [`Arc`] so cloning (e.g. into a
 /// redactor) is cheap, and in [`SecretBox<String>`] so `Debug` is redacted
