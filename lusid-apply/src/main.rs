@@ -25,6 +25,17 @@ struct Cli {
     #[arg(long = "params")]
     params_json: Option<String>,
 
+    /// Path to the age/SSH identity file used to decrypt project secrets.
+    /// Omit to run without secrets (plans referencing `@core/secret` will
+    /// fail at apply time).
+    #[arg(long = "identity")]
+    identity_path: Option<PathBuf>,
+
+    /// Directory containing `lusid-secrets.toml` and `*.age` ciphertexts.
+    /// Defaults to `<root>/secrets`.
+    #[arg(long = "secrets-dir")]
+    secrets_dir: Option<PathBuf>,
+
     /// Log level (e.g., trace, debug, info, warn, error). Default: info.
     #[arg(long = "log", default_value = "info")]
     log: String,
@@ -45,6 +56,8 @@ async fn main() {
         root_path: cli.root_path,
         plan_id,
         params_json: cli.params_json,
+        identity_path: cli.identity_path,
+        secrets_dir: cli.secrets_dir,
     };
 
     if let Err(err) = apply(options).await {

@@ -2500,6 +2500,7 @@ dependencies = [
  "lusid-params",
  "lusid-plan",
  "lusid-resource",
+ "lusid-secrets",
  "lusid-store",
  "lusid-system",
  "lusid-tree",
@@ -2546,6 +2547,7 @@ name = "lusid-ctx"
 version = "0.1.0"
 dependencies = [
  "lusid-http",
+ "lusid-secrets",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -2666,6 +2668,7 @@ dependencies = [
  "indexmap",
  "secrecy",
  "serde",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.9.8",

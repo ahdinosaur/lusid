@@ -5,5 +5,6 @@ edition = "2024"
 
 [dependencies]
 lusid-http = { path = "../http", version = "0.1" }
+lusid-secrets = { path = "../secrets", version = "0.1" }
 thiserror.workspace = true
 tracing.workspace = true

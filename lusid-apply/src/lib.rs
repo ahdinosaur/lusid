@@ -41,6 +41,10 @@ use lusid_plan::{
     self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
+use lusid_secrets::{
+    DecryptDirError, Identity, IdentityError, Recipients, RecipientsError, alias_for_identity,
+    decrypt_dir,
+};
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
@@ -54,10 +58,19 @@ use tracing::{debug, error, info};
 /// Inputs for [`apply`]. `root_path` is the lusid working-dir root passed to
 /// [`Context::create`]; `plan_id` selects a plan; `params_json` is an
 /// optional JSON object (validated against the plan's params schema).
+///
+/// Secrets: if `identity_path` is `Some`, `lusid-apply` loads that identity,
+/// reads `lusid-secrets.toml` from `secrets_dir` (defaulting to
+/// `<root>/secrets`), matches the identity to an alias, and decrypts the
+/// subset of `*.age` files declared for that alias. `None` skips secrets
+/// entirely (plans that reference `@core/secret` will fail at apply with a
+/// missing-secret error).
 pub struct ApplyOptions {
     pub root_path: PathBuf,
     pub plan_id: PlanId,
     pub params_json: Option<String>,
+    pub identity_path: Option<PathBuf>,
+    pub secrets_dir: Option<PathBuf>,
 }
 
 #[derive(Error, Debug)]
@@ -97,6 +110,21 @@ pub enum ApplyError {
 
     #[error(transparent)]
     OperationApply(#[from] OperationApplyError),
+
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
+
+    #[error(transparent)]
+    Recipients(#[from] RecipientsError),
+
+    #[error(transparent)]
+    DecryptDir(#[from] DecryptDirError),
+
+    /// The identity's public key does not match any alias in
+    /// `[operators]` or `[machines]` of `lusid-secrets.toml`. Without a
+    /// known alias we cannot pick which files to decrypt for this host.
+    #[error("supplied identity matches no alias in lusid-secrets.toml")]
+    NoAliasForIdentity,
 }
 
 /// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it
@@ -110,11 +138,36 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         root_path,
         plan_id,
         params_json,
+        identity_path,
+        secrets_dir,
     } = options;
 
     let mut ctx = Context::create(&root_path)?;
     let mut store = Store::new(ctx.paths().cache_dir());
     let system = System::get().await?;
+
+    // Resolve secrets_dir to <root>/secrets by default. Only consulted when
+    // an identity is supplied — without one, there's no key to decrypt with
+    // so the directory's existence is irrelevant.
+    let secrets_dir = secrets_dir.unwrap_or_else(|| root_path.join("secrets"));
+    if let Some(identity_path) = identity_path.as_deref() {
+        info!(
+            identity = %identity_path.display(),
+            secrets_dir = %secrets_dir.display(),
+            "loading secrets",
+        );
+        let identity = Identity::from_file(identity_path).await?;
+        let recipients = Recipients::load(&secrets_dir).await?;
+        let alias =
+            alias_for_identity(&identity, &recipients).ok_or(ApplyError::NoAliasForIdentity)?;
+        let stems = recipients.files_for_alias(alias);
+        debug!(alias, count = stems.len(), "alias matched");
+        let secrets = decrypt_dir(&identity, &secrets_dir, &stems).await?;
+        info!(count = secrets.len(), "secrets loaded");
+        ctx.set_secrets(secrets);
+    } else {
+        debug!("no identity supplied; proceeding without secrets");
+    }
 
     info!(plan = %plan_id, "using plan");
 
