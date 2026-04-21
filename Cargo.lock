@@ -2588,12 +2588,14 @@ name = "lusid-operation"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "displaydoc",
  "lusid-cmd",
  "lusid-ctx",
  "lusid-fs",
  "lusid-http",
  "lusid-view",
  "pin-project",
+ "secrecy",
  "serde",
  "thiserror 2.0.18",
  "tokio",
@@ -2650,6 +2652,7 @@ dependencies = [
  "lusid-params",
  "lusid-view",
  "rimu",
+ "secrecy",
  "serde",
  "serde_json",
  "sha2 0.10.9",

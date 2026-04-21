@@ -1,22 +1,40 @@
 use async_trait::async_trait;
+use displaydoc::Display as DisplaydocDisplay;
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_view::impl_display_render;
+use secrecy::ExposeSecret;
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
     path::Path,
     pin::Pin,
 };
+use thiserror::Error;
 use tokio::io::AsyncRead;
 use tracing::info;
 
 use crate::OperationType;
 
+/// Errors from applying a [`FileOperation`]: filesystem I/O or a missing
+/// secret lookup during [`FileSource::Secret`] resolution.
+#[derive(Debug, Error, DisplaydocDisplay)]
+pub enum FileApplyError {
+    /// {0}
+    Fs(#[from] FsError),
+
+    /// secret {name:?} referenced by file operation was not found in decrypted secrets bundle
+    MissingSecret { name: String },
+}
+
 #[derive(Debug, Clone)]
 pub enum FileSource {
     Contents(Vec<u8>),
     Path(FilePath),
+    /// Reference to a decrypted secret by name; resolved against
+    /// [`Context::secrets`] at apply time so plaintext never lives in the
+    /// resource/change/operation tree.
+    Secret(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -142,6 +160,9 @@ impl Display for FileOperation {
                     "File::Write(path = {}, source = Path({}))",
                     path, source_path
                 ),
+                FileSource::Secret(name) => {
+                    write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
+                }
             },
             FileOperation::Copy {
                 source,
@@ -181,6 +202,15 @@ impl Display for FileOperation {
 
 impl_display_render!(FileOperation);
 
+/// Internal: the apply-time resolution of a [`FileSource`] for a write.
+/// `Bytes` covers both inline contents and decrypted-secret plaintext;
+/// `Copy` covers a path-sourced copy. Kept out of the public API so
+/// callers can't conflate "plaintext in memory" with "copy from disk".
+enum WriteSource {
+    Bytes(Vec<u8>),
+    Copy(FilePath),
+}
+
 #[derive(Debug, Clone)]
 pub struct File;
 
@@ -193,13 +223,13 @@ impl OperationType for File {
     }
 
     type ApplyOutput = Pin<Box<dyn Future<Output = Result<(), Self::ApplyError>> + Send + 'static>>;
-    type ApplyError = FsError;
+    type ApplyError = FileApplyError;
 
     type ApplyStdout = Pin<Box<dyn AsyncRead + Send + 'static>>;
     type ApplyStderr = Pin<Box<dyn AsyncRead + Send + 'static>>;
 
     async fn apply(
-        _ctx: &mut Context,
+        ctx: &mut Context,
         operation: &Self::Operation,
     ) -> Result<(Self::ApplyOutput, Self::ApplyStdout, Self::ApplyStderr), Self::ApplyError> {
         let stdout = Box::pin(tokio::io::empty());
@@ -208,16 +238,33 @@ impl OperationType for File {
         match operation.clone() {
             FileOperation::Write { path, source } => {
                 info!("[file] write file: {}", path);
+                // Resolve up-front so the inner async block doesn't borrow
+                // ctx. For `Secret`, plaintext is copied out of the
+                // `SecretBox` envelope into a plain `Vec<u8>` that lives
+                // only for the duration of the write and is dropped
+                // immediately after.
+                let resolved: WriteSource = match source {
+                    FileSource::Contents(bytes) => WriteSource::Bytes(bytes),
+                    FileSource::Path(source) => WriteSource::Copy(source),
+                    FileSource::Secret(name) => {
+                        let secret = ctx
+                            .secrets()
+                            .get(&name)
+                            .ok_or_else(|| FileApplyError::MissingSecret { name: name.clone() })?;
+                        WriteSource::Bytes(secret.expose_secret().as_bytes().to_vec())
+                    }
+                };
                 Ok((
                     Box::pin(async move {
-                        match source {
-                            FileSource::Contents(contents) => {
-                                fs::write_file_atomic(path.as_path(), &contents).await
+                        match resolved {
+                            WriteSource::Bytes(bytes) => {
+                                fs::write_file_atomic(path.as_path(), &bytes).await?
                             }
-                            FileSource::Path(source) => {
-                                fs::copy_file_atomic(source.as_path(), path.as_path()).await
+                            WriteSource::Copy(source) => {
+                                fs::copy_file_atomic(source.as_path(), path.as_path()).await?
                             }
                         }
+                        Ok(())
                     }),
                     stdout,
                     stderr,
@@ -230,7 +277,8 @@ impl OperationType for File {
                 info!("[file] copy file: {} -> {}", source, destination);
                 Ok((
                     Box::pin(async move {
-                        fs::copy_file_atomic(source.as_path(), destination.as_path()).await
+                        fs::copy_file_atomic(source.as_path(), destination.as_path()).await?;
+                        Ok(())
                     }),
                     stdout,
                     stderr,
@@ -243,7 +291,8 @@ impl OperationType for File {
                 info!("[file] move file: {} -> {}", source, destination);
                 Ok((
                     Box::pin(async move {
-                        fs::rename_file(source.as_path(), destination.as_path()).await
+                        fs::rename_file(source.as_path(), destination.as_path()).await?;
+                        Ok(())
                     }),
                     stdout,
                     stderr,
@@ -252,7 +301,10 @@ impl OperationType for File {
             FileOperation::Remove { path } => {
                 info!("[file] remove file: {}", path);
                 Ok((
-                    Box::pin(async move { fs::remove_file(path.as_path()).await }),
+                    Box::pin(async move {
+                        fs::remove_file(path.as_path()).await?;
+                        Ok(())
+                    }),
                     stdout,
                     stderr,
                 ))
@@ -260,9 +312,10 @@ impl OperationType for File {
             FileOperation::CreateSymlink { source, path } => {
                 info!("[file] create symlink: {} -> {}", path, source);
                 Ok((
-                    Box::pin(
-                        async move { fs::create_symlink(source.as_path(), path.as_path()).await },
-                    ),
+                    Box::pin(async move {
+                        fs::create_symlink(source.as_path(), path.as_path()).await?;
+                        Ok(())
+                    }),
                     stdout,
                     stderr,
                 ))
@@ -270,7 +323,10 @@ impl OperationType for File {
             FileOperation::ChangeMode { path, mode } => {
                 info!("[file] change mode: {} -> {}", path, mode);
                 Ok((
-                    Box::pin(async move { fs::change_mode(path.as_path(), mode.as_u32()).await }),
+                    Box::pin(async move {
+                        fs::change_mode(path.as_path(), mode.as_u32()).await?;
+                        Ok(())
+                    }),
                     stdout,
                     stderr,
                 ))
@@ -287,7 +343,8 @@ impl OperationType for File {
                             user.as_ref().map(|u| u.as_str()),
                             group.as_ref().map(|g| g.as_str()),
                         )
-                        .await
+                        .await?;
+                        Ok(())
                     }),
                     stdout,
                     stderr,
