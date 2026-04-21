@@ -88,6 +88,24 @@ impl SshKeypair {
         Ok(public_key_exists && private_key_exists)
     }
 
+    /// Public key as a single-line OpenSSH string (`ssh-ed25519 AAAA...`).
+    /// Suitable for parsing into an age recipient or pushing into
+    /// `authorized_keys`.
+    pub fn public_openssh(&self) -> Result<String, SshKeypairError> {
+        Ok(self.public_key.to_openssh()?)
+    }
+
+    /// Private key as a multi-line OpenSSH PEM string. Use [`SshKeypair::save`]
+    /// to write to disk with the right mode; this getter exists for callers
+    /// that need to ship the bytes elsewhere (e.g. SFTP an identity to a
+    /// dev VM).
+    pub fn private_openssh(&self) -> Result<String, SshKeypairError> {
+        Ok(self
+            .private_key
+            .to_openssh(LineEnding::default())?
+            .to_string())
+    }
+
     /// Load a keypair from the directory.
     #[tracing::instrument(skip_all)]
     pub async fn load(directory: &Path) -> Result<Self, SshKeypairError> {

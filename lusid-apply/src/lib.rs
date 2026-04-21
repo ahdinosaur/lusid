@@ -43,7 +43,7 @@ use lusid_plan::{
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_secrets::{
     DecryptDirError, Identity, IdentityError, Recipients, RecipientsError, Redactor,
-    alias_for_identity, decrypt_dir,
+    alias_for_identity, decrypt_all, decrypt_dir,
 };
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
@@ -65,12 +65,20 @@ use tracing::{debug, error, info};
 /// subset of `*.age` files declared for that alias. `None` skips secrets
 /// entirely (plans that reference `@core/secret` will fail at apply with a
 /// missing-secret error).
+///
+/// `guest_mode` changes the secrets path for remote / dev-apply guests:
+/// skip the `lusid-secrets.toml` lookup and just decrypt every `*.age`
+/// under `secrets_dir` with the single identity we were given. The host
+/// has already re-encrypted ciphertexts per-target, so whatever landed in
+/// `secrets_dir` is exactly the subset this guest is supposed to see.
+/// Requires `identity_path` to be set.
 pub struct ApplyOptions {
     pub root_path: PathBuf,
     pub plan_id: PlanId,
     pub params_json: Option<String>,
     pub identity_path: Option<PathBuf>,
     pub secrets_dir: Option<PathBuf>,
+    pub guest_mode: bool,
 }
 
 #[derive(Error, Debug)]
@@ -125,6 +133,12 @@ pub enum ApplyError {
     /// known alias we cannot pick which files to decrypt for this host.
     #[error("supplied identity matches no alias in lusid-secrets.toml")]
     NoAliasForIdentity,
+
+    /// `--guest-mode` was set without `--identity`. Guest mode exists to
+    /// decrypt pre-filtered ciphertexts with a known-single identity; no
+    /// identity means nothing to decrypt with.
+    #[error("--guest-mode requires --identity")]
+    GuestModeWithoutIdentity,
 }
 
 /// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it
@@ -140,6 +154,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         params_json,
         identity_path,
         secrets_dir,
+        guest_mode,
     } = options;
 
     let mut ctx = Context::create(&root_path)?;
@@ -153,26 +168,43 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     // Built alongside `Secrets` so it can be cloned into per-operation
     // stdout/stderr scrubbing below. Holds `Arc` clones of the plaintexts,
     // so constructing it here and then moving `secrets` into `ctx` is safe.
-    let redactor: Redactor = if let Some(identity_path) = identity_path.as_deref() {
-        info!(
-            identity = %identity_path.display(),
-            secrets_dir = %secrets_dir.display(),
-            "loading secrets",
-        );
-        let identity = Identity::from_file(identity_path).await?;
-        let recipients = Recipients::load(&secrets_dir).await?;
-        let alias =
-            alias_for_identity(&identity, &recipients).ok_or(ApplyError::NoAliasForIdentity)?;
-        let stems = recipients.files_for_alias(alias);
-        debug!(alias, count = stems.len(), "alias matched");
-        let secrets = decrypt_dir(&identity, &secrets_dir, &stems).await?;
-        info!(count = secrets.len(), "secrets loaded");
-        let redactor = secrets.redactor();
-        ctx.set_secrets(secrets);
-        redactor
-    } else {
-        debug!("no identity supplied; proceeding without secrets");
-        Redactor::empty()
+    let redactor: Redactor = match (identity_path.as_deref(), guest_mode) {
+        (None, true) => return Err(ApplyError::GuestModeWithoutIdentity),
+        (None, false) => {
+            debug!("no identity supplied; proceeding without secrets");
+            Redactor::empty()
+        }
+        (Some(identity_path), true) => {
+            info!(
+                identity = %identity_path.display(),
+                secrets_dir = %secrets_dir.display(),
+                "loading secrets (guest mode)",
+            );
+            let identity = Identity::from_file(identity_path).await?;
+            let secrets = decrypt_all(&identity, &secrets_dir).await?;
+            info!(count = secrets.len(), "secrets loaded");
+            let redactor = secrets.redactor();
+            ctx.set_secrets(secrets);
+            redactor
+        }
+        (Some(identity_path), false) => {
+            info!(
+                identity = %identity_path.display(),
+                secrets_dir = %secrets_dir.display(),
+                "loading secrets",
+            );
+            let identity = Identity::from_file(identity_path).await?;
+            let recipients = Recipients::load(&secrets_dir).await?;
+            let alias =
+                alias_for_identity(&identity, &recipients).ok_or(ApplyError::NoAliasForIdentity)?;
+            let stems = recipients.files_for_alias(alias);
+            debug!(alias, count = stems.len(), "alias matched");
+            let secrets = decrypt_dir(&identity, &secrets_dir, &stems).await?;
+            info!(count = secrets.len(), "secrets loaded");
+            let redactor = secrets.redactor();
+            ctx.set_secrets(secrets);
+            redactor
+        }
     };
 
     info!(plan = %plan_id, "using plan");

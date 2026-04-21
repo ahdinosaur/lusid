@@ -36,6 +36,13 @@ struct Cli {
     #[arg(long = "secrets-dir")]
     secrets_dir: Option<PathBuf>,
 
+    /// Decrypt every `*.age` under `--secrets-dir` with `--identity`,
+    /// ignoring `lusid-secrets.toml`. Used on remote / dev-apply targets
+    /// where the host has already filtered the ciphertext set to exactly
+    /// what this guest should decrypt. Requires `--identity`.
+    #[arg(long = "guest-mode")]
+    guest_mode: bool,
+
     /// Log level (e.g., trace, debug, info, warn, error). Default: info.
     #[arg(long = "log", default_value = "info")]
     log: String,
@@ -58,6 +65,7 @@ async fn main() {
         params_json: cli.params_json,
         identity_path: cli.identity_path,
         secrets_dir: cli.secrets_dir,
+        guest_mode: cli.guest_mode,
     };
 
     if let Err(err) = apply(options).await {

@@ -26,7 +26,10 @@ use lusid_apply_stdio::AppViewError;
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_secrets::cli::{CliEnv as SecretsCliEnv, CliError as SecretsCliError, SecretsCommand};
-use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshVolume};
+use lusid_secrets::{
+    Identity, IdentityError, Key, KeyParseError, ReencryptForMachineError, reencrypt_for_machine,
+};
+use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshKeypairError, SshVolume};
 use lusid_vm::{Vm, VmError, VmOptions};
 use thiserror::Error;
 use tracing::error;
@@ -182,6 +185,18 @@ pub enum AppError {
 
     #[error(transparent)]
     Secrets(#[from] SecretsCliError),
+
+    #[error("failed to load host identity: {0}")]
+    SecretsIdentity(#[from] IdentityError),
+
+    #[error("failed to parse VM SSH public key as an age recipient: {0}")]
+    MachineKey(#[from] KeyParseError),
+
+    #[error("failed to re-encrypt secrets for target: {0}")]
+    ReencryptSecrets(#[from] ReencryptForMachineError),
+
+    #[error("failed to serialize VM SSH keypair: {0}")]
+    SshKeypair(#[from] SshKeypairError),
 }
 
 /// Resolve the config path (CLI flag → `LUSID_CONFIG` env → CWD → `.`) and
@@ -213,7 +228,9 @@ pub async fn run(cli: Cli, config: Config) -> Result<(), AppError> {
             RemoteCmd::Ssh { machine_id } => cmd_remote_ssh(config, machine_id).await,
         },
         Cmd::Dev { command } => match command {
-            DevCmd::Apply { machine_id } => cmd_dev_apply(config, machine_id).await,
+            DevCmd::Apply { machine_id } => {
+                cmd_dev_apply(config, machine_id, secrets_dir, identity_path).await
+            }
             DevCmd::Ssh { machine_id } => cmd_dev_ssh(config, machine_id).await,
         },
         Cmd::Secrets { command } => cmd_secrets(command, secrets_dir, identity_path).await,
@@ -304,7 +321,20 @@ async fn cmd_remote_ssh(_config: Config, _machine_id: String) -> Result<(), AppE
 // apply remotely and stream its stdout/stderr through the TUI just like
 // local apply. The VM's SSH keypair lives inside its instance dir (see
 // `lusid_vm`).
-async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppError> {
+//
+// Secrets are forwarded via per-target re-encryption: when `identity_path`
+// is set, the host decrypts every `*.age` with the operator identity,
+// re-encrypts each plaintext to the VM's SSH keypair alone, ships the
+// ciphertexts to `<dev_dir>/secrets/`, and points the guest's
+// `lusid-apply` at `<dev_dir>/identity` (the same VM keypair in OpenSSH
+// PEM form) via `--identity --guest-mode`. The operator identity never
+// leaves the host.
+async fn cmd_dev_apply(
+    config: Config,
+    machine_id: String,
+    secrets_dir: PathBuf,
+    identity_path: Option<PathBuf>,
+) -> Result<(), AppError> {
     let MachineConfig {
         plan,
         machine,
@@ -323,8 +353,10 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
     };
     let vm = Vm::run(&mut ctx, options).await?;
 
+    let vm_keypair = vm.ssh_keypair().await?;
+
     let mut ssh = Ssh::connect(SshConnectOptions {
-        private_key: vm.ssh_keypair().await?.private_key,
+        private_key: vm_keypair.private_key.clone(),
         addrs: (Ipv4Addr::LOCALHOST, vm.ssh_port),
         username: vm.user.clone(),
         config: Arc::new(Default::default()),
@@ -337,7 +369,7 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
     let plan_filename = plan.file_name().unwrap().to_string_lossy();
     let apply_bin = which(&config.lusid_apply_linux_x86_64_path)?;
 
-    let volumes = vec![
+    let mut volumes = vec![
         SshVolume::FilePath {
             local: apply_bin,
             remote: format!("{dev_dir}/lusid-apply"),
@@ -348,11 +380,49 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
         },
     ];
 
+    // Secrets forwarding mirrors `cmd_local_apply`'s gating on
+    // `identity_path`: no identity → no secrets shipped, and the guest
+    // will run without a secrets context (plans referencing
+    // `@core/secret` will error loudly).
+    let guest_identity_path = format!("{dev_dir}/identity");
+    let guest_secrets_dir = format!("{dev_dir}/secrets");
+    let forward_secrets = if let Some(identity_path) = identity_path.as_deref() {
+        let host_identity = Identity::from_file(identity_path).await?;
+        // The VM's auth keypair doubles as the age recipient/identity: it
+        // already lives on both sides (instance dir on host, authorized_keys
+        // on guest via cloud-init), is ephemeral per-VM, and re-using it
+        // avoids a second keygen + a cloud-init host-key injection path.
+        let machine_key: Key = vm_keypair.public_openssh()?.parse()?;
+        let reencrypted = reencrypt_for_machine(&host_identity, &secrets_dir, &machine_key).await?;
+
+        let private_pem = vm_keypair.private_openssh()?;
+        volumes.push(SshVolume::FileBytes {
+            local: private_pem.into_bytes(),
+            permissions: Some(0o600),
+            remote: guest_identity_path.clone(),
+        });
+        for secret in reencrypted {
+            volumes.push(SshVolume::FileBytes {
+                local: secret.ciphertext,
+                permissions: None,
+                remote: format!("{guest_secrets_dir}/{}.age", secret.stem),
+            });
+        }
+        true
+    } else {
+        false
+    };
+
     let log = &config.log;
     let mut command = format!(
         "{dev_dir}/lusid-apply --root {} --plan {dev_dir}/plan/{plan_filename} --log {log}",
         root.display()
     );
+    if forward_secrets {
+        command.push_str(&format!(
+            " --guest-mode --identity {guest_identity_path} --secrets-dir {guest_secrets_dir}"
+        ));
+    }
     if let Some(params) = params {
         let params_json = serde_json::to_string(&params)?;
         command.push_str(&format!(" --params '{params_json}'"));
