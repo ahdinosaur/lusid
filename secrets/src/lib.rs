@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use displaydoc::Display;
-use secrecy::SecretBox;
+use secrecy::{ExposeSecret, SecretBox};
 use thiserror::Error;
 use tokio::fs;
 
@@ -46,6 +46,13 @@ pub type Secret = Arc<SecretBox<String>>;
 
 /// A bundle of decrypted secrets, keyed by filename stem (e.g. the file
 /// `secrets/api_key.age` becomes `api_key`).
+///
+/// `Secrets` owns its plaintexts via [`Secret`] (an `Arc<SecretBox<String>>`)
+/// so `Debug` is redacted and the plaintext is zeroised when the last clone
+/// is dropped. Build a [`Redactor`] from a bundle via [`Secrets::redactor`]
+/// before handing the bundle off (e.g. to `Context::set_secrets`); the
+/// redactor holds independent `Arc` clones and stays valid after the
+/// original bundle is moved.
 #[derive(Debug, Default, Clone)]
 pub struct Secrets {
     values: HashMap<String, Secret>,
@@ -70,6 +77,98 @@ impl Secrets {
 
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+
+    /// Build a [`Redactor`] over every secret whose plaintext is at least
+    /// [`REDACT_MIN_LEN`] bytes. Shorter secrets are skipped because
+    /// substring-replacing e.g. a 2-byte secret against arbitrary process
+    /// output would match far too aggressively (`"ab"` would redact every
+    /// occurrence of those two bytes in every log line).
+    pub fn redactor(&self) -> Redactor {
+        let mut secrets: Vec<Secret> = self
+            .values
+            .values()
+            .filter(|s| s.expose_secret().len() >= REDACT_MIN_LEN)
+            .cloned()
+            .collect();
+        // Longest-first: if secret B is a substring of secret A, redacting
+        // A first ensures B never partially matches inside A's plaintext.
+        secrets.sort_by_key(|s| std::cmp::Reverse(s.expose_secret().len()));
+        Redactor { secrets }
+    }
+}
+
+/// Minimum plaintext length eligible for redaction. Shorter secrets are
+/// skipped to avoid pathological false positives when substring-matching
+/// against arbitrary process output.
+pub const REDACT_MIN_LEN: usize = 8;
+
+/// Placeholder string substituted in place of matched secret plaintext.
+pub const REDACTED: &str = "<redacted>";
+
+/// Substring-replaces secret plaintexts with [`REDACTED`] in arbitrary
+/// strings. Intended for scrubbing `lusid-apply`'s per-operation stdout
+/// and stderr lines before they are streamed to the TUI.
+///
+/// Limitations (read before trusting this for anything load-bearing):
+///
+/// - **Substring-only.** A secret that appears base64-encoded, escaped,
+///   JSON-serialised, or chunked across multiple read boundaries will not
+///   be caught. This is a best-effort scrub, not a guarantee.
+/// - **Short secrets are skipped.** See [`REDACT_MIN_LEN`].
+/// - **Emits plaintext briefly** via [`ExposeSecret`] during each call;
+///   the plaintext is not copied but is borrowed for the length of one
+///   `String::replace`.
+/// - **Overlapping/adjacent secrets are not reliably caught.** Longest-first
+///   ordering handles the nested case (secret B is a substring of secret A)
+///   but not the interleaved case: if A = "foobar" and B = "barfoo" both
+///   appear in "foobarfoo", only one of them will redact, leaving the
+///   other's plaintext visible. In practice this would need two secrets
+///   that share a suffix/prefix by coincidence; flagging anyway.
+#[derive(Clone)]
+pub struct Redactor {
+    secrets: Vec<Secret>,
+}
+
+impl std::fmt::Debug for Redactor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Redactor")
+            .field("len", &self.secrets.len())
+            .finish()
+    }
+}
+
+impl Redactor {
+    /// No-op redactor (no secrets).
+    pub fn empty() -> Self {
+        Self {
+            secrets: Vec::new(),
+        }
+    }
+
+    /// Replace every occurrence of every registered secret plaintext in
+    /// `input` with [`REDACTED`]. Returns `input` unchanged when no
+    /// secrets match (including the trivial empty-redactor case).
+    pub fn redact(&self, input: &str) -> String {
+        if self.secrets.is_empty() || input.is_empty() {
+            return input.to_string();
+        }
+        let mut out = input.to_string();
+        for secret in &self.secrets {
+            let plaintext = secret.expose_secret();
+            if out.contains(plaintext.as_str()) {
+                out = out.replace(plaintext.as_str(), REDACTED);
+            }
+        }
+        out
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.secrets.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.secrets.len()
     }
 }
 
@@ -235,5 +334,71 @@ mod tests {
         r.operators
             .insert("a".to_owned(), Key::X25519(id_a.to_public()));
         assert!(alias_for_identity(&identity, &r).is_none());
+    }
+
+    fn secret_of(s: &str) -> Secret {
+        Arc::new(SecretBox::new(Box::new(s.to_string())))
+    }
+
+    fn secrets_from(pairs: &[(&str, &str)]) -> Secrets {
+        let values = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_owned(), secret_of(v)))
+            .collect();
+        Secrets { values }
+    }
+
+    #[test]
+    fn redactor_empty_is_noop() {
+        let redactor = Redactor::empty();
+        assert_eq!(redactor.redact("hello world"), "hello world");
+        assert!(redactor.is_empty());
+    }
+
+    #[test]
+    fn redactor_replaces_occurrences() {
+        let secrets = secrets_from(&[("api_key", "supersecretvalue")]);
+        let redactor = secrets.redactor();
+        assert_eq!(
+            redactor.redact("auth: supersecretvalue; retrying supersecretvalue"),
+            "auth: <redacted>; retrying <redacted>"
+        );
+    }
+
+    #[test]
+    fn redactor_skips_short_secrets() {
+        // Below REDACT_MIN_LEN (8) — skipped entirely to avoid false
+        // positives on common short substrings.
+        let secrets = secrets_from(&[("pin", "12345")]);
+        let redactor = secrets.redactor();
+        assert!(redactor.is_empty());
+        assert_eq!(redactor.redact("pin is 12345"), "pin is 12345");
+    }
+
+    #[test]
+    fn redactor_prefers_longer_patterns() {
+        // Two secrets where one plaintext is a substring of the other:
+        // longer-first ordering ensures the outer pattern is redacted as
+        // a whole rather than leaving a fragment after the inner match.
+        let secrets = secrets_from(&[("outer", "aaaaaaaabbbbbbbb"), ("inner", "aaaaaaaabb")]);
+        let redactor = secrets.redactor();
+        assert_eq!(
+            redactor.redact("value=aaaaaaaabbbbbbbb done"),
+            "value=<redacted> done"
+        );
+    }
+
+    #[test]
+    fn redactor_handles_empty_input() {
+        let secrets = secrets_from(&[("k", "eightchars")]);
+        let redactor = secrets.redactor();
+        assert_eq!(redactor.redact(""), "");
+    }
+
+    #[test]
+    fn redactor_no_match_returns_input_unchanged() {
+        let secrets = secrets_from(&[("k", "eightchars")]);
+        let redactor = secrets.redactor();
+        assert_eq!(redactor.redact("nothing to see"), "nothing to see");
     }
 }

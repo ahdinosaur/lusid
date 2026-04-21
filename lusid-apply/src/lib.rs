@@ -42,8 +42,8 @@ use lusid_plan::{
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_secrets::{
-    DecryptDirError, Identity, IdentityError, Recipients, RecipientsError, alias_for_identity,
-    decrypt_dir,
+    DecryptDirError, Identity, IdentityError, Recipients, RecipientsError, Redactor,
+    alias_for_identity, decrypt_dir,
 };
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
@@ -150,7 +150,10 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     // an identity is supplied — without one, there's no key to decrypt with
     // so the directory's existence is irrelevant.
     let secrets_dir = secrets_dir.unwrap_or_else(|| root_path.join("secrets"));
-    if let Some(identity_path) = identity_path.as_deref() {
+    // Built alongside `Secrets` so it can be cloned into per-operation
+    // stdout/stderr scrubbing below. Holds `Arc` clones of the plaintexts,
+    // so constructing it here and then moving `secrets` into `ctx` is safe.
+    let redactor: Redactor = if let Some(identity_path) = identity_path.as_deref() {
         info!(
             identity = %identity_path.display(),
             secrets_dir = %secrets_dir.display(),
@@ -164,10 +167,13 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         debug!(alias, count = stems.len(), "alias matched");
         let secrets = decrypt_dir(&identity, &secrets_dir, &stems).await?;
         info!(count = secrets.len(), "secrets loaded");
+        let redactor = secrets.redactor();
         ctx.set_secrets(secrets);
+        redactor
     } else {
         debug!("no identity supplied; proceeding without secrets");
-    }
+        Redactor::empty()
+    };
 
     info!(plan = %plan_id, "using plan");
 
@@ -323,6 +329,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
             let stdout_task = {
                 let mut lines = BufReader::new(stdout).lines();
+                let redactor = redactor.clone();
                 async move {
                     while let Some(line) = lines
                         .next_line()
@@ -331,7 +338,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
                     {
                         emit(AppUpdate::OperationApplyStdout {
                             index,
-                            stdout: line,
+                            stdout: redactor.redact(&line),
                         })
                         .await?;
                     }
@@ -341,6 +348,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
 
             let stderr_task = {
                 let mut lines = BufReader::new(stderr).lines();
+                let redactor = redactor.clone();
                 async move {
                     while let Some(line) = lines
                         .next_line()
@@ -349,7 +357,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
                     {
                         emit(AppUpdate::OperationApplyStderr {
                             index,
-                            stderr: line,
+                            stderr: redactor.redact(&line),
                         })
                         .await?;
                     }
