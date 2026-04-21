@@ -308,6 +308,17 @@ async fn cmd_local_apply(
 // from config, connect to its hostname over SSH (using either agent auth or
 // a configured key), upload the plan + lusid-apply binary, run apply, and
 // pipe through the TUI — essentially `cmd_dev_*` without the VM bring-up.
+//
+// Secrets strategy: mirror `cmd_dev_apply`'s per-target re-encryption, with
+// two substitutions:
+//   - Recipient key comes from `Recipients::get_machine(machine_id)` —
+//     looked up in `lusid-secrets.toml`'s `[machines]` table — rather than
+//     an ephemeral VM auth key.
+//   - Guest identity is the target's existing
+//     `/etc/ssh/ssh_host_ed25519_key` on the machine itself — nothing is
+//     SFTP'd for the identity; just pass `--identity=/etc/ssh/ssh_host_ed25519_key`
+//     (plus `--guest-mode --secrets-dir=...`). Requires the guest
+//     `lusid-apply` to run as root, which it typically does already.
 async fn cmd_remote_apply(_config: Config, _machine_id: String) -> Result<(), AppError> {
     todo!()
 }
