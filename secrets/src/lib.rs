@@ -8,9 +8,9 @@
 //! apply.
 //!
 //! This crate provides the primitives ([`Identity`], [`Key`], byte-level
-//! encrypt/decrypt), the `lusid-secrets.toml` [`Recipients`] model, and the
-//! apply-time [`Secrets`] bundle plus [`decrypt_dir`] / [`alias_for_identity`].
-//! The CLI lands in a later phase.
+//! encrypt/decrypt), the `lusid-secrets.toml` [`Recipients`] model, the
+//! apply-time [`Secrets`] bundle plus [`decrypt_dir`] / [`alias_for_identity`],
+//! and the `lusid secrets ...` CLI ([`cli`]).
 
 mod check;
 pub mod cli;
@@ -185,7 +185,7 @@ impl Redactor {
 /// (no silent fallback to an empty bundle).
 ///
 /// An empty `file_stems` returns an empty [`Secrets`] without touching the
-/// filesystem. Pass an empty slice on the "no identity supplied" path.
+/// filesystem.
 #[tracing::instrument(skip(identity, file_stems), fields(dir = %secrets_dir.display(), count = file_stems.len()))]
 pub async fn decrypt_dir(
     identity: &Identity,
@@ -241,12 +241,6 @@ pub enum DecryptDirError {
 /// guest-mode applies (dev / remote re-encryption targets) where the host
 /// has already filtered the set of files to exactly what this target should
 /// see, and there's no `Recipients` config on the guest.
-///
-/// The asymmetry with [`decrypt_dir`] is deliberate: rather than have the
-/// host synthesise a single-entry `lusid-secrets.toml` on the guest so it
-/// could go through the same TOML-driven path, the guest just decrypts
-/// whatever it was handed. Two small functions is simpler than one function
-/// plus a synthetic-config generator.
 ///
 /// Missing `secrets_dir` returns an empty [`Secrets`]. Non-`.age` files are
 /// ignored.

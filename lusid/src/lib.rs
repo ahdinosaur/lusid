@@ -264,8 +264,7 @@ async fn cmd_secrets(
 }
 
 // Spawns `lusid-apply` as a subprocess and pipes its stdout + stderr into
-// the TUI. `Command::output` here returns streaming handles, not a finished
-// `std::process::Output` — naming is from `lusid_cmd`, not `std`.
+// the TUI.
 async fn cmd_local_apply(
     config: Config,
     secrets_dir: PathBuf,

@@ -23,9 +23,9 @@
 //! meaningfully limiting usage.
 //!
 //! The operator / machine split is load-bearing for per-target re-encryption
-//! at apply time: `lusid-apply`'s host uses the target machine's SSH host key
-//! (looked up in `[machines]` by `machine_id`) as the sole recipient before
-//! shipping ciphertext to the guest. See [`Recipients::get_machine`].
+//! done by `lusid remote apply`: the target machine's SSH host key (looked up
+//! in `[machines]` by `machine_id`) is the sole recipient before ciphertext
+//! is shipped to the guest. See [`Recipients::get_machine`].
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

@@ -23,12 +23,11 @@ pub enum FileApplyError {
     /// {0}
     Fs(#[from] FsError),
 
-    // Mirrored at state-probe time by
-    // `lusid_resource::resources::file::FileStateError::MissingSecret`;
-    // the state-side variant fires when a file already exists and its
-    // contents are being diffed against the bundle. This apply-side
-    // variant is the backstop for new-file writes where the state probe
-    // short-circuited on the missing path without consulting the bundle.
+    // Twin of `lusid_resource::resources::file::FileStateError::MissingSecret`
+    // — the state-side fires when a file already exists (contents diffed
+    // against the bundle); this apply-side variant is the backstop for
+    // new-file writes, where state short-circuited on the missing path
+    // without consulting the bundle.
     /// secret {name:?} referenced by file operation was not found in decrypted secrets bundle
     MissingSecret { name: String },
 }
@@ -208,10 +207,9 @@ impl Display for FileOperation {
 
 impl_display_render!(FileOperation);
 
-/// Internal: the apply-time resolution of a [`FileSource`] for a write.
-/// `Bytes` covers both inline contents and decrypted-secret plaintext;
-/// `Copy` covers a path-sourced copy. Kept out of the public API so
-/// callers can't conflate "plaintext in memory" with "copy from disk".
+/// Apply-time resolution of a [`FileSource`] for a write: `Bytes` covers
+/// both inline contents and decrypted-secret plaintext; `Copy` covers a
+/// path-sourced copy.
 enum WriteSource {
     Bytes(Vec<u8>),
     Copy(FilePath),

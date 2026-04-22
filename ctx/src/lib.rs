@@ -28,8 +28,8 @@ pub enum ContextError {
 /// decrypted secrets bundle.
 ///
 /// The secrets bundle starts empty; `lusid-apply` populates it via
-/// [`Context::set_secrets`] before invoking the planner so resources observed
-/// during planning can read the plaintexts they depend on.
+/// [`Context::set_secrets`] before state probes and operation apply — the
+/// stages that resolve secret references by name.
 #[derive(Debug, Clone)]
 pub struct Context {
     root: PathBuf,
