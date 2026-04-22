@@ -39,7 +39,7 @@ use tokio::fs;
 
 use crate::key::Key;
 
-pub const SECRETS_FILE: &str = "lusid-secrets.toml";
+pub(crate) const SECRETS_FILE: &str = "lusid-secrets.toml";
 
 /// Parsed `lusid-secrets.toml`. Order preserved so listing commands match
 /// on-disk order. Operator and machine aliases share a single namespace at
@@ -175,7 +175,7 @@ impl Recipients {
     /// Group references (`@name`) are expanded; duplicate aliases are
     /// deduplicated. Returns an error only when `stem` is not in `[files]` —
     /// all other references are validated at load time.
-    pub fn resolve(&self, stem: &str) -> Result<Vec<ResolvedRecipient>, ResolveError> {
+    pub(crate) fn resolve(&self, stem: &str) -> Result<Vec<ResolvedRecipient>, ResolveError> {
         let entry = self
             .files
             .get(stem)
@@ -250,14 +250,14 @@ impl Recipients {
     }
 
     /// Every file stem listed in `[files]`, in declaration order.
-    pub fn file_stems(&self) -> impl Iterator<Item = &str> {
+    pub(crate) fn file_stems(&self) -> impl Iterator<Item = &str> {
         self.files.keys().map(String::as_str)
     }
 }
 
 /// One recipient for a specific file, carrying its alias for display.
 #[derive(Debug, Clone)]
-pub struct ResolvedRecipient {
+pub(crate) struct ResolvedRecipient {
     pub alias: String,
     pub key: Key,
 }
@@ -265,7 +265,9 @@ pub struct ResolvedRecipient {
 /// Convert a resolved recipient list into the boxed form `age` expects for
 /// encryption. Cheap clones — both [`Key`] variants wrap small recipient
 /// types (a public point or an SSH pubkey).
-pub fn to_boxed_recipients(resolved: &[ResolvedRecipient]) -> Vec<Box<dyn age::Recipient + Send>> {
+pub(crate) fn to_boxed_recipients(
+    resolved: &[ResolvedRecipient],
+) -> Vec<Box<dyn age::Recipient + Send>> {
     resolved
         .iter()
         .map(|r| -> Box<dyn age::Recipient + Send> {

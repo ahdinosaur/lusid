@@ -25,7 +25,7 @@ const HEADER_MAC_PREFIX: &[u8] = b"--- ";
 ///
 /// `path` is used only for labelling errors; the bytes themselves come from
 /// `ciphertext`.
-pub fn decrypt_bytes(
+pub(crate) fn decrypt_bytes(
     identity: &Identity,
     path: &Path,
     ciphertext: &[u8],
@@ -60,7 +60,7 @@ pub fn decrypt_bytes(
 ///
 /// `path` is only used for error labelling. `recipients` must be non-empty —
 /// age rejects an empty recipient set.
-pub fn encrypt_bytes(
+pub(crate) fn encrypt_bytes(
     recipients: &[Box<dyn Recipient + Send>],
     path: &Path,
     plaintext: &[u8],
@@ -96,7 +96,7 @@ pub fn encrypt_bytes(
 /// We only need the stanzas' tags and first argument to compare against the
 /// intended recipient list — body and MAC are ignored. Returns the stanzas
 /// in file order. Does not authenticate the header.
-pub fn read_header_stanzas(ciphertext: &[u8]) -> Result<Vec<Stanza>, HeaderError> {
+pub(crate) fn read_header_stanzas(ciphertext: &[u8]) -> Result<Vec<Stanza>, HeaderError> {
     if !ciphertext.starts_with(AGE_V1_MAGIC) {
         return Err(HeaderError::BadMagic);
     }

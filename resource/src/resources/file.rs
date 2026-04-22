@@ -6,8 +6,8 @@ use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_operation::{
-    Operation,
     operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
+    Operation,
 };
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
@@ -62,7 +62,7 @@ pub enum FileResource {
     /// Contents sourced from a decrypted secret by name; resolved against
     /// [`Context::secrets`] at state/apply time so plaintext never travels
     /// through the resource/change tree. See `@core/secret`.
-    SecretContents {
+    Secret {
         name: String,
         path: FilePath,
     },
@@ -92,8 +92,8 @@ impl Display for FileResource {
             FileResource::Sourced { source, path } => {
                 write!(f, "FileSourced({source} -> {path})")
             }
-            FileResource::SecretContents { name, path } => {
-                write!(f, "FileSecretContents(secret = {name} -> {path})")
+            FileResource::Secret { name, path } => {
+                write!(f, "FileSecret(secret = {name} -> {path})")
             }
             FileResource::Present { path } => write!(f, "FilePresent({path})"),
             FileResource::Absent { path } => write!(f, "FileAbsent({path})"),
@@ -371,7 +371,7 @@ impl ResourceType for File {
                 }
             }
 
-            FileResource::SecretContents { name, path } => {
+            FileResource::Secret { name, path } => {
                 if !fs::path_exists(path.as_path()).await? {
                     FileState::NotSourced
                 } else {
@@ -459,14 +459,14 @@ impl ResourceType for File {
 
             (FileResource::Sourced { .. }, FileState::Sourced) => None,
 
-            (FileResource::SecretContents { name, path }, FileState::NotSourced) => {
+            (FileResource::Secret { name, path }, FileState::NotSourced) => {
                 Some(FileChange::Write {
                     path: path.clone(),
                     source: FileSource::Secret(name.clone()),
                 })
             }
 
-            (FileResource::SecretContents { .. }, FileState::Sourced) => None,
+            (FileResource::Secret { .. }, FileState::Sourced) => None,
 
             (FileResource::Present { path }, FileState::Absent) => Some(FileChange::Write {
                 path: path.clone(),

@@ -33,7 +33,7 @@ use crate::key::Key;
 use crate::recipients::{Recipients, ResolveError, ResolvedRecipient};
 
 #[derive(Debug, Default)]
-pub struct CheckReport {
+pub(crate) struct CheckReport {
     pub orphans: Vec<PathBuf>,
     pub missing: Vec<String>,
     pub resolve_errors: Vec<ResolveError>,
@@ -42,13 +42,13 @@ pub struct CheckReport {
 }
 
 #[derive(Debug)]
-pub struct DriftedFile {
+pub(crate) struct DriftedFile {
     pub stem: String,
     pub reason: DriftReason,
 }
 
 #[derive(Debug)]
-pub enum DriftReason {
+pub(crate) enum DriftReason {
     /// Header stanza counts don't match: expected `{expected_x25519}`
     /// x25519 + `{expected_ssh}` SSH, found `{actual_x25519}` x25519 +
     /// `{actual_ssh}` SSH.
@@ -72,7 +72,7 @@ pub enum DriftReason {
 }
 
 #[derive(Debug)]
-pub struct ReadError {
+pub(crate) struct ReadError {
     pub path: PathBuf,
     pub source: std::io::Error,
 }
@@ -100,7 +100,10 @@ pub enum CheckError {
 /// Walk `secrets_dir` and cross-check against `recipients`. Does not
 /// decrypt — everything here is either a file existence / stanza count
 /// check or a header stanza read.
-pub async fn check(secrets_dir: &Path, recipients: &Recipients) -> Result<CheckReport, CheckError> {
+pub(crate) async fn check(
+    secrets_dir: &Path,
+    recipients: &Recipients,
+) -> Result<CheckReport, CheckError> {
     let mut report = CheckReport::default();
 
     let mut on_disk: BTreeMap<String, PathBuf> = BTreeMap::new();

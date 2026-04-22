@@ -42,8 +42,8 @@ use lusid_plan::{
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
 use lusid_secrets::{
-    DecryptDirError, Identity, IdentityError, Recipients, RecipientsError, Redactor,
-    alias_for_identity, decrypt_all, decrypt_dir,
+    DecryptAllError, DecryptDirError, Identity, IdentityError, Recipients, RecipientsError,
+    Redactor, alias_for_identity, decrypt_all, decrypt_dir,
 };
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
@@ -127,6 +127,9 @@ pub enum ApplyError {
 
     #[error(transparent)]
     DecryptDir(#[from] DecryptDirError),
+
+    #[error(transparent)]
+    DecryptAll(#[from] DecryptAllError),
 
     /// The identity's public key does not match any alias in
     /// `[operators]` or `[machines]` of `lusid-secrets.toml`. Without a

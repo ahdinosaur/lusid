@@ -11,7 +11,7 @@
 //!   when omitted. `@core/file` leaves mode to the umask.
 //!
 //! Under the hood this delegates to `@core/file`'s state/change/operation
-//! machinery — the atoms produced are ordinary [`FileResource::SecretContents`]
+//! machinery — the atoms produced are ordinary [`FileResource::Secret`]
 //! variants, so downstream scheduling and application are identical. Only
 //! the default permissions and the intent expressed by the plan author differ.
 //!
@@ -106,7 +106,7 @@ impl ResourceType for Secret {
         let mut nodes = vec![
             CausalityTree::leaf(
                 CausalityMeta::id("file".into()),
-                FileResource::SecretContents {
+                FileResource::Secret {
                     name,
                     path: path.clone(),
                 },
