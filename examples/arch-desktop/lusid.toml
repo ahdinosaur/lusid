@@ -1,0 +1,11 @@
+log = "info"
+
+# A single Arch Linux x86-64 machine provisioned as a graphical workstation
+# with XFCE + LightDM. When running as a dev VM, QEMU opens a local window
+# (graphics on by default) so you can actually see the desktop.
+
+[machines.desktop]
+hostname = "desktop"
+arch = "x86-64"
+os = { type = "linux", linux = "arch" }
+plan = "./desktop.lusid"
