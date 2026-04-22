@@ -21,6 +21,13 @@
 //! - [`ParamType::TargetPath`]: an **absolute** string, used as-is on the managed
 //!   machine.
 //!
+//! A resolved `HostPath` / `TargetPath` exposed back to Rimu (as a field of the
+//! `params` argument to a plan's `setup`) carries [`HOST_PATH_TAG`] /
+//! [`TARGET_PATH_TAG`] so a nested module receiving it as `HostPath` /
+//! `TargetPath` can distinguish a forwarded value from a raw user string — and
+//! can reject a cross-kind forward (e.g. a host path passed into a target-path
+//! field) with a type mismatch instead of silently accepting it.
+//!
 //! # Union semantics
 //!
 //! A [`ParamTypes::Union`] is a list of struct cases. Validation is **first-match**:
@@ -59,6 +66,20 @@ use thiserror::Error;
 /// grows a `Value::Secret`, this round-trip is an accepted limitation.
 pub type Secret = Arc<SecretBox<String>>;
 
+/// Rimu tag applied to a [`ParamValue::HostPath`] when it is exposed back to
+/// Rimu (e.g. as a `params.*` field inside a plan's `setup`). The tagged inner
+/// is the fully-resolved absolute path as a string. The tag lets downstream
+/// validation discriminate it from a raw string or a [`TARGET_PATH_TAG`]-tagged
+/// value — a `params.some_host_path` forwarded to a nested module's `HostPath`
+/// field passes through without being re-resolved against the nested source's
+/// directory, and a `params.some_target_path` passed there fails with a
+/// type mismatch instead of silently succeeding.
+pub const HOST_PATH_TAG: &str = "host-path";
+
+/// Rimu tag applied to a [`ParamValue::TargetPath`] when it is exposed back to
+/// Rimu. Mirrors [`HOST_PATH_TAG`] — see there for rationale.
+pub const TARGET_PATH_TAG: &str = "target-path";
+
 /// Schema node: the allowed shape of a single value.
 ///
 /// - `Literal` matches an exact Rimu value (used to discriminate union cases on a
@@ -66,7 +87,9 @@ pub type Secret = Arc<SecretBox<String>>;
 /// - `List` / `Object` are homogeneous containers — every element/value matches
 ///   the inner type.
 /// - `HostPath` / `TargetPath` are `String` at the Rimu level but carry stricter
-///   semantics (relative vs absolute; see module docs).
+///   semantics (relative vs absolute; see module docs). When exposed back to
+///   Rimu they become [`Value::Tagged`] with [`HOST_PATH_TAG`] / [`TARGET_PATH_TAG`]
+///   so a nested module can tell them apart from a raw string of the wrong kind.
 /// - `Secret` is `String` at the Rimu level, but materialises into a
 ///   [`ParamValue::Secret`] so downstream code holds a redacted-on-Debug
 ///   [`SecretString`] rather than plaintext.
@@ -151,10 +174,13 @@ pub enum ParamValue {
 impl ParamValue {
     pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
         let (value, span) = value.take();
-        Spanned::new(value.into_rimu(), span)
+        let rimu_value = value.into_rimu(span.clone());
+        Spanned::new(rimu_value, span)
     }
 
-    pub fn into_rimu(self) -> Value {
+    /// `span` is used as the span for the inner [`Spanned<Value>`] of any
+    /// [`Value::Tagged`] wrappers produced for `HostPath` / `TargetPath`.
+    pub fn into_rimu(self, span: Span) -> Value {
         match self {
             ParamValue::Literal(value) => value,
             ParamValue::Boolean(value) => Value::Boolean(value),
@@ -171,8 +197,19 @@ impl ParamValue {
                     .collect();
                 Value::Object(map)
             }
-            ParamValue::HostPath(path) => Value::String(path.to_string_lossy().into_owned()),
-            ParamValue::TargetPath(path) => Value::String(path),
+            ParamValue::HostPath(path) => Value::Tagged {
+                tag: HOST_PATH_TAG.to_string(),
+                inner: Box::new(Spanned::new(
+                    Value::String(path.to_string_lossy().into_owned()),
+                    span,
+                )),
+                meta: Default::default(),
+            },
+            ParamValue::TargetPath(path) => Value::Tagged {
+                tag: TARGET_PATH_TAG.to_string(),
+                inner: Box::new(Spanned::new(Value::String(path), span)),
+                meta: Default::default(),
+            },
             ParamValue::Secret(secret) => Value::String(secret.expose_secret().to_owned()),
         }
     }
@@ -283,7 +320,33 @@ impl ParamValue {
                     Err(ParamValueFromRimuError::HostPathSourceNeedsParent { source_path })
                 }
             }
+            // Already-resolved HostPath forwarded from a parent plan's `params`.
+            // The tag carries the absolute path through evaluation, so here we
+            // just peel it — no re-resolution against the nested source's dir.
+            (ParamType::HostPath, Value::Tagged { tag, inner, .. }) if tag == HOST_PATH_TAG => {
+                let inner_value = inner.into_inner();
+                if let Value::String(value) = inner_value {
+                    Ok(ParamValue::HostPath(PathBuf::from(value)))
+                } else {
+                    Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
+                        typ: Box::new(ParamType::HostPath),
+                        value: Box::new(inner_value),
+                    })
+                }
+            }
             (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
+            // Already-validated TargetPath forwarded from a parent plan's `params`.
+            (ParamType::TargetPath, Value::Tagged { tag, inner, .. }) if tag == TARGET_PATH_TAG => {
+                let inner_value = inner.into_inner();
+                if let Value::String(value) = inner_value {
+                    Ok(ParamValue::TargetPath(value))
+                } else {
+                    Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
+                        typ: Box::new(ParamType::TargetPath),
+                        value: Box::new(inner_value),
+                    })
+                }
+            }
             (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Arc::new(
                 SecretBox::new(Box::new(value)),
             ))),
@@ -706,25 +769,30 @@ fn validate_type(
             _ => Err(mismatch(param_type, value)),
         },
 
-        ParamType::HostPath => {
-            #[allow(clippy::collapsible_if)]
-            if let Value::String(path) = value_inner {
-                if Path::new(path).is_relative() {
-                    return Ok(());
-                }
+        ParamType::HostPath => match value_inner {
+            // User-authored: a relative string to be resolved against the
+            // source file's directory (see `from_rimu_spanned`).
+            Value::String(path) if Path::new(path).is_relative() => Ok(()),
+            // Forwarded from a parent plan: already resolved, carried across
+            // evaluation via the tag so we can tell it apart from a raw string
+            // or from a `TARGET_PATH_TAG` value.
+            Value::Tagged { tag, inner, .. }
+                if tag == HOST_PATH_TAG && matches!(inner.inner(), Value::String(_)) =>
+            {
+                Ok(())
             }
-            Err(mismatch(param_type, value))
-        }
+            _ => Err(mismatch(param_type, value)),
+        },
 
-        ParamType::TargetPath => {
-            #[allow(clippy::collapsible_if)]
-            if let Value::String(path) = value_inner {
-                if Path::new(path).is_absolute() {
-                    return Ok(());
-                }
+        ParamType::TargetPath => match value_inner {
+            Value::String(path) if Path::new(path).is_absolute() => Ok(()),
+            Value::Tagged { tag, inner, .. }
+                if tag == TARGET_PATH_TAG && matches!(inner.inner(), Value::String(_)) =>
+            {
+                Ok(())
             }
-            Err(mismatch(param_type, value))
-        }
+            _ => Err(mismatch(param_type, value)),
+        },
 
         ParamType::Secret => match value_inner {
             // Note(cc): empty-string secrets pass — a secret file can legitimately
@@ -879,5 +947,73 @@ pub fn validate(
 
             Err(ParamsValidationError::Union { case_errors })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimu::SourceId;
+
+    fn test_span() -> Span {
+        Span::new(SourceId::from("/plans/parent.lusid".to_string()), 0, 0)
+    }
+
+    fn spanned<T: Clone>(value: T) -> Spanned<T> {
+        Spanned::new(value, test_span())
+    }
+
+    fn tagged_string(tag: &str, s: &str) -> Value {
+        Value::Tagged {
+            tag: tag.to_string(),
+            inner: Box::new(spanned(Value::String(s.to_string()))),
+            meta: Default::default(),
+        }
+    }
+
+    #[test]
+    fn host_path_round_trips_through_tagged_value() {
+        // Parent validated a HostPath into an absolute PathBuf, then exposed it
+        // back to Rimu via `into_rimu` — that's a tagged value. A nested module
+        // receiving it as HostPath should re-parse to the same absolute path
+        // without re-resolving against the nested source's directory.
+        let param = spanned(ParamValue::HostPath(PathBuf::from(
+            "/plans/parent/gitconfig",
+        )));
+        let rimu_value = ParamValue::into_rimu_spanned(param.clone());
+
+        assert!(matches!(
+            rimu_value.inner(),
+            Value::Tagged { tag, .. } if tag == HOST_PATH_TAG
+        ));
+
+        let nested_span = Span::new(SourceId::from("/elsewhere/child.lusid".to_string()), 0, 0);
+        let round_tripped = ParamValue::from_rimu_spanned(
+            Spanned::new(rimu_value.into_inner(), nested_span),
+            ParamType::HostPath,
+        )
+        .unwrap();
+        let ParamValue::HostPath(path) = round_tripped.into_inner() else {
+            panic!("expected HostPath");
+        };
+        assert_eq!(path, PathBuf::from("/plans/parent/gitconfig"));
+    }
+
+    #[test]
+    fn target_path_tag_mismatch_rejected_by_host_path_validation() {
+        // The point of the tags: a TargetPath forwarded into a HostPath field
+        // must be a type mismatch, not silently accepted as a string.
+        let typ = spanned(ParamType::HostPath);
+        let value = spanned(tagged_string(TARGET_PATH_TAG, "/etc/foo"));
+        let err = validate_type(&typ, &value).unwrap_err();
+        assert!(matches!(err, ValidateValueError::TypeMismatch { .. }));
+    }
+
+    #[test]
+    fn host_path_tag_mismatch_rejected_by_target_path_validation() {
+        let typ = spanned(ParamType::TargetPath);
+        let value = spanned(tagged_string(HOST_PATH_TAG, "/plans/parent/gitconfig"));
+        let err = validate_type(&typ, &value).unwrap_err();
+        assert!(matches!(err, ValidateValueError::TypeMismatch { .. }));
     }
 }
