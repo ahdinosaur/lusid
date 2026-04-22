@@ -242,6 +242,12 @@ pub enum DecryptDirError {
 /// has already filtered the set of files to exactly what this target should
 /// see, and there's no `Recipients` config on the guest.
 ///
+/// The asymmetry with [`decrypt_dir`] is deliberate: rather than have the
+/// host synthesise a single-entry `lusid-secrets.toml` on the guest so it
+/// could go through the same TOML-driven path, the guest just decrypts
+/// whatever it was handed. Two small functions is simpler than one function
+/// plus a synthetic-config generator.
+///
 /// Missing `secrets_dir` returns an empty [`Secrets`]. Non-`.age` files are
 /// ignored.
 #[tracing::instrument(skip(identity), fields(dir = %secrets_dir.display()))]
@@ -320,6 +326,13 @@ pub struct ReencryptedSecret {
 /// target's key, ships them over SSH, and points the guest's `lusid-apply`
 /// at them via `--secrets-dir` + `--guest-mode`.
 ///
+/// Assumes `host_identity` is a recipient on every `*.age` under
+/// `secrets_dir` (this uses [`decrypt_all`], not `files_for_alias` filtering).
+/// In a multi-operator world where the operator running `dev apply` only has
+/// access to a subset of files, `decrypt_all` will fail on the first file
+/// they can't decrypt. For v1's single-operator-per-project flow this is
+/// fine; revisit when operators-with-scoped-access becomes a real use case.
+///
 /// Plaintexts live only inside the intermediate [`Secrets`] and are zeroised
 /// when it drops at function return. The operator identity never leaves the
 /// host.
@@ -366,6 +379,12 @@ pub enum ReencryptForMachineError {
 /// `identity`. Implemented as an encrypt-then-decrypt round-trip so it works
 /// uniformly across x25519 and SSH without leaking the identity's public
 /// material out of the `age` crate.
+///
+/// Cost is `O(N)` encryptions plus one decryption per table entry until a
+/// match is found — `age::Identity` doesn't expose a public-key accessor
+/// that's uniform across x25519 and SSH, so the probe is the pragmatic
+/// option. Fine for typical team / fleet sizes; worth revisiting if
+/// `lusid-secrets.toml` ever grows to hundreds of entries.
 ///
 /// Returns `None` when no alias matches; callers should treat this as a hard
 /// configuration error (the supplied identity isn't declared anywhere).

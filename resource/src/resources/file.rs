@@ -146,6 +146,11 @@ pub enum FileStateError {
     #[error(transparent)]
     Fs(#[from] FsError),
 
+    /// Fires at state probe time when comparing on-disk contents against a
+    /// declared secret. Mirrored by
+    /// [`FileApplyError::MissingSecret`](lusid_operation::operations::file::FileApplyError::MissingSecret)
+    /// on the apply side (reached for new files whose path doesn't yet
+    /// exist, so state returns `NotSourced` without consulting the bundle).
     #[error(
         "secret {name:?} referenced by file resource was not found in decrypted secrets bundle"
     )]

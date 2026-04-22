@@ -23,6 +23,12 @@ pub enum FileApplyError {
     /// {0}
     Fs(#[from] FsError),
 
+    // Mirrored at state-probe time by
+    // `lusid_resource::resources::file::FileStateError::MissingSecret`;
+    // the state-side variant fires when a file already exists and its
+    // contents are being diffed against the bundle. This apply-side
+    // variant is the backstop for new-file writes where the state probe
+    // short-circuited on the missing path without consulting the bundle.
     /// secret {name:?} referenced by file operation was not found in decrypted secrets bundle
     MissingSecret { name: String },
 }
