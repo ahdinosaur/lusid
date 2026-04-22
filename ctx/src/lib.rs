@@ -26,10 +26,6 @@ pub enum ContextError {
 
 /// Runtime context for a lusid invocation — plan root, XDG paths, HTTP client,
 /// decrypted secrets bundle.
-///
-/// The secrets bundle starts empty; `lusid-apply` populates it via
-/// [`Context::set_secrets`] before state probes and operation apply — the
-/// stages that resolve secret references by name.
 #[derive(Debug, Clone)]
 pub struct Context {
     root: PathBuf,
