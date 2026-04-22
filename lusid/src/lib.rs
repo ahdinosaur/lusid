@@ -26,9 +26,7 @@ use lusid_apply_stdio::AppViewError;
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_secrets::cli::{CliEnv as SecretsCliEnv, CliError as SecretsCliError, SecretsCommand};
-use lusid_secrets::{
-    Identity, IdentityError, Key, KeyParseError, ReencryptForMachineError, reencrypt_for_machine,
-};
+use lusid_secrets::{ReencryptForMachineError, reencrypt_for_machine};
 use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshKeypairError, SshVolume};
 use lusid_vm::{Vm, VmError, VmOptions};
 use thiserror::Error;
@@ -186,12 +184,6 @@ pub enum AppError {
     #[error(transparent)]
     Secrets(#[from] SecretsCliError),
 
-    #[error("failed to load host identity: {0}")]
-    SecretsIdentity(#[from] IdentityError),
-
-    #[error("failed to parse VM SSH public key as an age recipient: {0}")]
-    MachineKey(#[from] KeyParseError),
-
     #[error("failed to re-encrypt secrets for target: {0}")]
     ReencryptSecrets(#[from] ReencryptForMachineError),
 
@@ -310,9 +302,10 @@ async fn cmd_local_apply(
 //
 // Secrets strategy: mirror `cmd_dev_apply`'s per-target re-encryption, with
 // two substitutions:
-//   - Recipient key comes from `Recipients::get_machine(machine_id)` —
-//     looked up in `lusid-secrets.toml`'s `[machines]` table — rather than
-//     an ephemeral VM auth key.
+//   - Recipient key is the target machine's entry in `lusid-secrets.toml`'s
+//     `[machines]` table — looked up by `machine_id` — rather than an
+//     ephemeral VM auth key. `lusid_secrets` will need a small helper to
+//     expose that lookup; the CLI doesn't have `Recipients` access directly.
 //   - Guest identity is the target's existing
 //     `/etc/ssh/ssh_host_ed25519_key` on the machine itself — nothing is
 //     SFTP'd for the identity; just pass `--identity=/etc/ssh/ssh_host_ed25519_key`
@@ -397,13 +390,13 @@ async fn cmd_dev_apply(
     let guest_identity_path = format!("{dev_dir}/identity");
     let guest_secrets_dir = format!("{dev_dir}/secrets");
     let forward_secrets = if let Some(identity_path) = identity_path.as_deref() {
-        let host_identity = Identity::from_file(identity_path).await?;
         // The VM's auth keypair doubles as the age recipient/identity: it
         // already lives on both sides (instance dir on host, authorized_keys
         // on guest via cloud-init), is ephemeral per-VM, and re-using it
         // avoids a second keygen + a cloud-init host-key injection path.
-        let machine_key: Key = vm_keypair.public_openssh()?.parse()?;
-        let reencrypted = reencrypt_for_machine(&host_identity, &secrets_dir, &machine_key).await?;
+        let machine_pubkey = vm_keypair.public_openssh()?;
+        let reencrypted =
+            reencrypt_for_machine(identity_path, &secrets_dir, &machine_pubkey).await?;
 
         let private_pem = vm_keypair.private_openssh()?;
         volumes.push(SshVolume::FileBytes {

@@ -212,14 +212,6 @@ impl Recipients {
         }
     }
 
-    /// Look up a machine's recipient key by `machine_id`. Returns the matching
-    /// entry from `[machines]`, or `None` if the alias is absent. Deliberately
-    /// does not fall back to `[operators]` — per-target re-encryption only
-    /// ever encrypts to a machine's own key.
-    pub fn get_machine(&self, machine_id: &str) -> Option<&Key> {
-        self.machines.get(machine_id)
-    }
-
     /// File stems this alias can decrypt, in declaration order.
     ///
     /// Includes every file whose `[files].recipients` list mentions `alias`
@@ -480,14 +472,6 @@ a = "age1t7rxyev2z3rw82stdlrrepyc39nvn86l5078zqkf5uasdy86jp6svpy7pa"
         )
         .unwrap_err();
         assert!(matches!(err, RecipientsError::EmptyRecipients { .. }));
-    }
-
-    #[test]
-    fn get_machine_only_returns_from_machines_table() {
-        let r = parse();
-        assert!(r.get_machine("rpi").is_some());
-        // Operators are deliberately excluded.
-        assert!(r.get_machine("mikey").is_none());
     }
 
     /// Two real x25519 public keys derived at runtime — some of the

@@ -41,10 +41,7 @@ use lusid_plan::{
     self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
-use lusid_secrets::{
-    DecryptAllError, DecryptDirError, Identity, IdentityError, Recipients, RecipientsError,
-    Redactor, alias_for_identity, decrypt_all, decrypt_dir,
-};
+use lusid_secrets::{LoadError, Redactor, Secrets};
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
@@ -120,28 +117,7 @@ pub enum ApplyError {
     OperationApply(#[from] OperationApplyError),
 
     #[error(transparent)]
-    Identity(#[from] IdentityError),
-
-    #[error(transparent)]
-    Recipients(#[from] RecipientsError),
-
-    #[error(transparent)]
-    DecryptDir(#[from] DecryptDirError),
-
-    #[error(transparent)]
-    DecryptAll(#[from] DecryptAllError),
-
-    /// The identity's public key does not match any alias in
-    /// `[operators]` or `[machines]` of `lusid-secrets.toml`. Without a
-    /// known alias we cannot pick which files to decrypt for this host.
-    #[error("supplied identity matches no alias in lusid-secrets.toml")]
-    NoAliasForIdentity,
-
-    /// `--guest-mode` was set without `--identity`. Guest mode exists to
-    /// decrypt pre-filtered ciphertexts with a known-single identity; no
-    /// identity means nothing to decrypt with.
-    #[error("--guest-mode requires --identity")]
-    GuestModeWithoutIdentity,
+    Secrets(#[from] LoadError),
 }
 
 /// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it
@@ -171,44 +147,9 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     // Built alongside `Secrets` so it can be cloned into per-operation
     // stdout/stderr scrubbing below. Holds `Arc` clones of the plaintexts,
     // so constructing it here and then moving `secrets` into `ctx` is safe.
-    let redactor: Redactor = match (identity_path.as_deref(), guest_mode) {
-        (None, true) => return Err(ApplyError::GuestModeWithoutIdentity),
-        (None, false) => {
-            debug!("no identity supplied; proceeding without secrets");
-            Redactor::empty()
-        }
-        (Some(identity_path), true) => {
-            info!(
-                identity = %identity_path.display(),
-                secrets_dir = %secrets_dir.display(),
-                "loading secrets (guest mode)",
-            );
-            let identity = Identity::from_file(identity_path).await?;
-            let secrets = decrypt_all(&identity, &secrets_dir).await?;
-            info!(count = secrets.len(), "secrets loaded");
-            let redactor = secrets.redactor();
-            ctx.set_secrets(secrets);
-            redactor
-        }
-        (Some(identity_path), false) => {
-            info!(
-                identity = %identity_path.display(),
-                secrets_dir = %secrets_dir.display(),
-                "loading secrets",
-            );
-            let identity = Identity::from_file(identity_path).await?;
-            let recipients = Recipients::load(&secrets_dir).await?;
-            let alias =
-                alias_for_identity(&identity, &recipients).ok_or(ApplyError::NoAliasForIdentity)?;
-            let stems = recipients.files_for_alias(alias);
-            debug!(alias, count = stems.len(), "alias matched");
-            let secrets = decrypt_dir(&identity, &secrets_dir, &stems).await?;
-            info!(count = secrets.len(), "secrets loaded");
-            let redactor = secrets.redactor();
-            ctx.set_secrets(secrets);
-            redactor
-        }
-    };
+    let secrets = Secrets::load(&secrets_dir, identity_path.as_deref(), guest_mode).await?;
+    let redactor: Redactor = secrets.redactor();
+    ctx.set_secrets(secrets);
 
     info!(plan = %plan_id, "using plan");
 

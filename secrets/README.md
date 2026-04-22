@@ -12,19 +12,19 @@ time, and plaintext only ever reaches the target filesystem through
                               [operators] [machines] [groups] [files]
                                      |
                                      v
- host identity  -->  alias_for_identity  -->  Recipients::files_for_alias
- (x25519 / ssh)                                         |
-                                                        v
-                    decrypt_dir  -->  Secrets { HashMap<String, SecretBox<String>> }
-                                               |
-                                               v
-                                      Context::set_secrets(...)
-                                               |
-                                               v
-                      plan refers to secret by name  -->  @core/secret { name, path, ... }
-                                               |
-                                               v
-                               FileSource::Secret(name), atomic-write
+ host identity  -->  Secrets::load(secrets_dir, identity_path, guest_mode)
+ (x25519 / ssh)                     |
+                                    v
+                    Secrets { HashMap<String, SecretBox<String>> }
+                                    |
+                                    v
+                          Context::set_secrets(...)
+                                    |
+                                    v
+            plan refers to secret by name  -->  @core/secret { name, path, ... }
+                                    |
+                                    v
+                    FileSource::Secret(name), atomic-write
 ```
 
 A `Redactor` hangs off the same `Secrets` bundle; every per-operation
@@ -92,34 +92,36 @@ only for the duration of one atomic write. Plans never see plaintext —
 
 ## Apply-time decryption
 
-Two modes produce the `Secrets` bundle:
+`Secrets::load(secrets_dir, identity_path, guest_mode)` is the single entry
+point. Its behaviour depends on the two flags:
 
-**Host mode** (`lusid-apply` with a project identity):
+**Host mode** (`identity_path = Some`, `guest_mode = false`) — the normal
+`lusid-apply` path: reads `lusid-secrets.toml`, matches the identity's public
+key against `[operators]` / `[machines]` (no match is a hard error), and
+decrypts only the files the matched alias is declared as a recipient for.
 
-1. `Identity::from_file(identity_path)`.
-2. `Recipients::load(secrets_dir)`.
-3. `alias_for_identity(&identity, &recipients)` — matches the identity's
-   public key against `[operators]` / `[machines]`. No match is a hard error.
-4. `decrypt_dir(&identity, secrets_dir, recipients.files_for_alias(alias))` —
-   decrypts only the files the alias is declared as a recipient for. Files
-   outside the list are never opened.
-5. `ctx.set_secrets(secrets)` before planning.
+**Guest mode** (`identity_path = Some`, `guest_mode = true`) — used by `dev
+apply` / `remote apply` targets: skips `lusid-secrets.toml` and decrypts
+every `*.age` under `secrets_dir` with the supplied identity. The host has
+already filtered the bundle to exactly what this guest should see via
+per-target re-encryption, so no Recipients config is needed on the guest.
 
-**Guest mode** (`lusid-apply --guest-mode`, used by `dev apply` / `remote apply`
-targets):
+**No identity** (`identity_path = None`, `guest_mode = false`) — returns an
+empty bundle. Plans referencing `@core/secret` will fail later with a
+missing-secret error.
 
-- Skips `lusid-secrets.toml`.
-- `decrypt_all(&identity, secrets_dir)` decrypts every `*.age` file.
-- The host has already filtered the bundle to exactly what this guest should
-  see via per-target re-encryption, so no Recipients config is needed on the
-  guest and we don't synthesise one.
+Callers then wrap the result with `secrets.redactor()` (for per-operation
+output scrubbing) and hand the bundle to `ctx.set_secrets(...)` before
+planning.
 
 ## Per-target re-encryption
 
-`reencrypt_for_machine(host_identity, secrets_dir, machine_key)` decrypts
-every `*.age` on the host, re-encrypts each plaintext to `machine_key` alone,
-and returns the single-recipient ciphertexts. Callers SFTP the bundle to the
-guest and run `lusid-apply --guest-mode --identity=<guest identity>` there.
+`reencrypt_for_machine(host_identity_path, secrets_dir, machine_pubkey)`
+decrypts every `*.age` on the host, re-encrypts each plaintext to
+`machine_pubkey` alone, and returns the single-recipient ciphertexts.
+Callers SFTP the bundle to the guest and run `lusid-apply --guest-mode
+--identity=<guest identity>` there. `machine_pubkey` is either an `age1...`
+x25519 recipient or an `ssh-ed25519 ...` / `ssh-rsa ...` SSH public key.
 
 - **Operator identity never leaves the host.** The guest only ever holds
   ciphertext encrypted to its own key, plus the identity file it decrypts
@@ -127,14 +129,15 @@ guest and run `lusid-apply --guest-mode --identity=<guest identity>` there.
 - `dev apply` (VM targets): reuses the ephemeral SSH keypair lusid uses for
   SSH auth as both the age recipient (host side) and the guest identity
   (guest side).
-- `remote apply`: recipient is `Recipients::get_machine(machine_id)`; the
-  guest identity is the target's existing `/etc/ssh/ssh_host_ed25519_key`.
+- `remote apply`: recipient is the target's entry in `[machines]` looked up
+  by `machine_id`; the guest identity is the target's existing
+  `/etc/ssh/ssh_host_ed25519_key`.
 
 This assumes the operator running `dev apply` / `remote apply` is a recipient
 on every `*.age` under `secrets_dir`. In a multi-operator world with
-scoped access, `decrypt_all` will fail on the first file the acting operator
-can't read. Fine for v1's one-operator-per-project flow; revisit when scoped
-access is a real use case.
+scoped access, the intermediate decrypt step will fail on the first file the
+acting operator can't read. Fine for v1's one-operator-per-project flow;
+revisit when scoped access is a real use case.
 
 ## Redactor
 

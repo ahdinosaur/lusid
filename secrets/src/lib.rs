@@ -1,16 +1,29 @@
 //! Age-encrypted secrets for lusid plans.
 //!
 //! A lusid project stores secrets as individual `*.age` files under a
-//! `secrets/` directory. At apply time the host's [`Identity`] decrypts the
-//! subset of files it's a recipient for and hands the plaintexts to
+//! `secrets/` directory. At apply time the host's age/SSH identity decrypts
+//! the subset of files it's a recipient for and hands the plaintexts to
 //! `@core/secret` resources by name. Plaintexts never enter the Rimu
 //! evaluator — plans reference secrets by name, contents materialise at
 //! apply.
 //!
-//! This crate provides the primitives ([`Identity`], [`Key`]), the
-//! `lusid-secrets.toml` [`Recipients`] model, the apply-time [`Secrets`]
-//! bundle plus [`decrypt_dir`] / [`decrypt_all`] / [`alias_for_identity`] /
-//! [`reencrypt_for_machine`], and the `lusid secrets ...` CLI ([`cli`]).
+//! ## Public surface
+//!
+//! - [`Secrets`] / [`Secret`] — the decrypted bundle handed to the rest of
+//!   the apply pipeline, plus the per-entry plaintext wrapper.
+//! - [`Secrets::load`] — one-shot load from `(secrets_dir, identity_path,
+//!   guest_mode)` into a ready-to-use bundle, returning [`LoadError`].
+//! - [`Redactor`] — substring-scrubs known secret plaintexts out of
+//!   per-operation stdout/stderr.
+//! - [`reencrypt_for_machine`] — host-side re-encrypt of every `*.age` under
+//!   a directory for a single target's public key; used by `dev apply` /
+//!   `remote apply` to ship per-target ciphertext bundles.
+//! - [`cli`] — the `lusid secrets ...` subcommands.
+//!
+//! Lower-level primitives (identity parsing, `lusid-secrets.toml` loading,
+//! per-file encrypt/decrypt, alias matching) are kept crate-private. They're
+//! the building blocks for the public surface above; reopen them if a third
+//! consumption pattern needs direct access.
 
 mod alias;
 mod check;
@@ -20,47 +33,13 @@ mod decrypt_all;
 mod decrypt_dir;
 mod identity;
 mod key;
+mod load;
 mod recipients;
 mod redactor;
 mod reencrypt;
 mod secrets;
 
-pub use crate::alias::alias_for_identity;
-pub use crate::check::CheckError;
-pub use crate::crypto::{DecryptError, EncryptError, HeaderError};
-pub use crate::decrypt_all::{DecryptAllError, decrypt_all};
-pub use crate::decrypt_dir::{DecryptDirError, decrypt_dir};
-pub use crate::identity::{Identity, IdentityError};
-pub use crate::key::{Key, KeyParseError};
-pub use crate::recipients::{FileEntry, Recipients, RecipientsError, ResolveError};
+pub use crate::load::LoadError;
 pub use crate::redactor::Redactor;
 pub use crate::reencrypt::{ReencryptForMachineError, ReencryptedSecret, reencrypt_for_machine};
 pub use crate::secrets::{Secret, Secrets};
-
-use thiserror::Error;
-
-/// Combined error across every fallible [`lusid-secrets`](crate) operation —
-/// mirrors [`SshError`](../lusid_ssh/enum.SshError.html). Callers that want
-/// to bubble up any failure from the crate in a single enum can use this;
-/// callers that only care about a specific entry point can match on the
-/// per-function error type directly.
-#[derive(Debug, Error)]
-pub enum SecretsError {
-    #[error(transparent)]
-    Identity(#[from] IdentityError),
-
-    #[error(transparent)]
-    Key(#[from] KeyParseError),
-
-    #[error(transparent)]
-    Recipients(#[from] RecipientsError),
-
-    #[error(transparent)]
-    DecryptDir(#[from] DecryptDirError),
-
-    #[error(transparent)]
-    DecryptAll(#[from] DecryptAllError),
-
-    #[error(transparent)]
-    ReencryptForMachine(#[from] ReencryptForMachineError),
-}

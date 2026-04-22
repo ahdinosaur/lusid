@@ -184,7 +184,7 @@ mod tests {
         assert!(stanzas.iter().any(|s| s.tag == "X25519"));
 
         // Round-trip through Identity.
-        let identity: crate::Identity = id.to_string().expose_secret().parse().unwrap();
+        let identity: crate::identity::Identity = id.to_string().expose_secret().parse().unwrap();
         let pt = decrypt_bytes(&identity, Path::new("test"), &ct).unwrap();
         assert_eq!(pt.expose_secret().as_str(), "hello");
     }
@@ -200,7 +200,7 @@ mod tests {
     #[test]
     fn decrypts_invalid_ciphertext_fails() {
         let id = x25519::Identity::generate();
-        let identity: crate::Identity = id.to_string().expose_secret().parse().unwrap();
+        let identity: crate::identity::Identity = id.to_string().expose_secret().parse().unwrap();
         let err = decrypt_bytes(&identity, Path::new("test"), b"garbage").unwrap_err();
         assert!(matches!(err, DecryptError::Decrypt { .. }));
     }
