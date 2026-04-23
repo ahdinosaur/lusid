@@ -32,6 +32,7 @@
 //! for the machine-readable protocol.
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{CausalityTree, EpochError, compute_epochs};
@@ -49,6 +50,7 @@ use rimu::SourceId;
 use rimu_interop::{ToRimuError, to_rimu};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 /// Inputs for [`apply`]. `root_path` is the lusid working-dir root passed to
@@ -321,21 +323,28 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     Ok(())
 }
 
+/// Serializes access to stdout across the apply. Operation stdout/stderr are
+/// drained concurrently via `tokio::try_join!`, so without a mutex two
+/// `emit()` calls can interleave — one task's JSON can land between another's
+/// JSON and its trailing newline, which the TUI reads as a single line with
+/// trailing characters. Pipe writes are only atomic up to `PIPE_BUF` (4 KiB);
+/// AppUpdates with large trees exceed that easily.
+static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 /// Serialize `update` to a single JSON line on stdout and flush.
 ///
 /// The flush is load-bearing: the TUI reads line-by-line with
 /// `AsyncBufRead::lines()`, so buffering would make progress updates
 /// invisible to the reader even though the work completed long before.
 async fn emit(update: AppUpdate) -> Result<(), ApplyError> {
+    let mut line = serde_json::to_vec(&update).map_err(ApplyError::JsonOutput)?;
+    line.push(b'\n');
+
+    let _guard = EMIT_LOCK.lock().await;
     let mut stdout = tokio::io::stdout();
 
     stdout
-        .write_all(&serde_json::to_vec(&update).map_err(ApplyError::JsonOutput)?)
-        .await
-        .map_err(ApplyError::WriteStdout)?;
-
-    stdout
-        .write_all(b"\n")
+        .write_all(&line)
         .await
         .map_err(ApplyError::WriteStdout)?;
 
