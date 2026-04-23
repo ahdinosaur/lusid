@@ -7,10 +7,19 @@ version: "0.1.0"
 #   - the X11 server (`xorg-server`, `xorg-xinit`)
 #   - the XFCE desktop environment (`xfce4` meta-package)
 #   - a display manager (`lightdm` + `lightdm-gtk-greeter`)
+#   - a login account (`params.username` / `params.password`) so the greeter
+#     has someone to let in — the Arch cloud image's default `arch` user has
+#     a locked password and can't sign in graphically.
 #
 # Then enables + starts LightDM so the graphical login greeter appears on
 # the next boot (and immediately, if the VM is already running).
-setup: () =>
+params:
+  username:
+    type: "string"
+  password:
+    type: "string"
+
+setup: (params) =>
   # `@core/pacman` with `packages` installs the whole set in one transaction,
   # which is both faster and friendlier to pacman's dependency solver than
   # installing each package separately.
@@ -24,12 +33,36 @@ setup: () =>
         - "lightdm"
         - "lightdm-gtk-greeter"
 
+  # Create the login account. Without this, the only user on the cloud
+  # image is `arch` with a locked password, so the LightDM greeter has
+  # no one to authenticate.
+  - module: "@core/user"
+    id: "create-login-user"
+    params:
+      state: "present"
+      name: params.username
+
+  # `@core/user` doesn't set passwords yet (see the TODO in
+  # `resource/src/resources/user.rs`), so we shell out to `chpasswd`.
+  # `passwd -S` prints `<name> <status> ...` where status is `P` (password
+  # set), `L` (locked), or `NP` (no password). Matching ` P ` keeps this
+  # idempotent: once a password is set, re-applies skip the install step.
+  - module: "@core/command"
+    id: "set-login-password"
+    requires:
+      - "create-login-user"
+    params:
+      status: "install"
+      is_installed: "sh -c \"sudo -n passwd -S '" + params.username + "' | grep -q ' P '\""
+      install: "printf '%s:%s' '" + params.username + "' '" + params.password + "' | sudo -n chpasswd"
+
   # Turn on the display manager. `enabled: true` persists across reboots;
   # `active: true` starts it right now. LightDM then launches the greeter
   # on the console, which offers the XFCE session.
   - module: "@core/systemd"
     requires:
       - "install-desktop"
+      - "set-login-password"
     params:
       name: "lightdm"
       enabled: true
