@@ -80,6 +80,7 @@ pub async fn setup_instance(
     let MachineVmOptions {
         memory_size,
         cpu_count,
+        disk_size,
         graphics,
     } = machine.vm.clone().unwrap_or_default();
 
@@ -97,7 +98,7 @@ pub async fn setup_instance(
     let executables = ctx.executables();
     let instance_paths = VmPaths::new(&instance_dir);
 
-    setup_overlay(&instance_paths, &source_image_path).await?;
+    setup_overlay(&instance_paths, &source_image_path, disk_size).await?;
     setup_ovmf_uefi_variables(executables, &instance_paths).await?;
 
     let VmKernelDetails { has_initrd } =
@@ -126,6 +127,7 @@ pub async fn setup_instance(
         ssh_port,
         memory_size,
         cpu_count,
+        disk_size,
         ports,
         graphics,
         // TODO(cc): plumb through global lusid config so KVM can be disabled

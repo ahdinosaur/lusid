@@ -8,7 +8,7 @@
 // Note(cc): this crate is deliberately small. As the product picks up remote deployment,
 // credentials, or lifecycle policies, those fields land here.
 
-use lusid_system::{Arch, CpuCount, Hostname, MemorySize, Os};
+use lusid_system::{Arch, CpuCount, DiskSize, Hostname, MemorySize, Os};
 use serde::{Deserialize, Serialize};
 
 /// Declarative spec of a machine we want to provision.
@@ -26,5 +26,10 @@ pub struct Machine {
 pub struct MachineVmOptions {
     pub memory_size: Option<MemorySize>,
     pub cpu_count: Option<CpuCount>,
+    /// Virtual size (bytes) of the guest root disk overlay. Cloud images
+    /// ship with a small partition (~2 GB); raise this when the plan
+    /// installs a lot of software. Cloud-init expands the root partition +
+    /// filesystem to fill the disk on first boot.
+    pub disk_size: Option<DiskSize>,
     pub graphics: Option<bool>,
 }
