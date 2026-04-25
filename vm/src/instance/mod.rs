@@ -10,7 +10,7 @@ use lusid_ctx::Context as BaseContext;
 use lusid_fs::{self as fs, FsError};
 use lusid_machine::Machine;
 use lusid_ssh::{SshKeypair, SshKeypairError};
-use lusid_system::{Arch, CpuCount, Linux, MemorySize};
+use lusid_system::{Arch, CpuCount, DiskSize, Linux, MemorySize};
 use nix::{
     sys::signal::{Signal, kill},
     unistd::Pid,
@@ -94,6 +94,9 @@ pub struct Vm {
     pub ssh_port: u16,
     pub memory_size: Option<MemorySize>,
     pub cpu_count: Option<CpuCount>,
+    /// Virtual size of the overlay qcow2, applied at first-create time by
+    /// `setup_overlay`. `None` falls back to the crate default.
+    pub disk_size: Option<DiskSize>,
     pub ports: Vec<VmPort>,
     pub graphics: Option<bool>,
     pub kvm: Option<bool>,

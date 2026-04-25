@@ -1,0 +1,43 @@
+name: "web-server"
+version: "0.1.0"
+
+# Parameters each machine must provide via lusid.toml's `params`.
+params:
+  greeting:
+    type: "string"
+
+# `setup` receives the validated params and the current `system` descriptor
+# (hostname, arch, os, user). It returns a list of items; each item is either
+# a `@core/*` resource or a nested plan.
+setup: (params, system) =>
+  # 1. Install the nginx package from Debian's apt repos.
+  - module: "@core/apt"
+    id: "install-nginx"
+    params:
+      package: "nginx"
+
+  # 2. Replace the default welcome page with one that shows this machine's
+  #    greeting and hostname.
+  #
+  #    `/var/www/html/` is root-owned, and `@core/file` doesn't yet wrap
+  #    writes with sudo, so we shell out to `tee` via passwordless sudo.
+  #    The `is_installed` check makes this idempotent: if the page already
+  #    contains the greeting, the install command is skipped.
+  - module: "@core/command"
+    id: "publish-index"
+    requires:
+      - "install-nginx"
+    params:
+      status: "install"
+      is_installed: "grep -qF \"" + params.greeting + "\" /var/www/html/index.html"
+      install: "printf '<!doctype html><html><body><h1>%s</h1><p>Served by %s via lusid.</p></body></html>' \"" + params.greeting + "\" \"" + system.hostname + "\" | sudo -n tee /var/www/html/index.html > /dev/null"
+
+  # 3. Make sure nginx is enabled at boot and currently running.
+  - module: "@core/systemd"
+    requires:
+      - "install-nginx"
+      - "publish-index"
+    params:
+      name: "nginx"
+      enabled: true
+      active: true

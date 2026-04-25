@@ -1,27 +1,53 @@
 export LUSID_APPLY_LINUX_X86_64 := "./target/x86_64-unknown-linux-gnu/release/lusid-apply"
 export LUSID_APPLY_LINUX_AARCH64 := "./target/aarch64-unknown-linux-gnu/release/lusid-apply"
 
+# Show available recipes.
+default:
+  @just --list
+
+# Build the `lusid-apply` binary that the `lusid` CLI uploads into dev VMs.
 build-lusid-apply:
   cargo build -p lusid-apply --target x86_64-unknown-linux-gnu --release
   # cargo build -p lusid-apply --target aarch64-unknown-linux-gnu --release
 
-lusid-local-apply: build-lusid-apply
-  cargo run -p lusid --release -- local apply --config ./examples/lusid.toml
+# -----------------------------------------------------------------------------
+# Example: examples/nginx-cluster
+#
+# Two Debian 13 x86-64 servers, each running nginx with a per-machine greeting.
 
-lusid-dev-a-apply: build-lusid-apply
-  cargo run -p lusid --release -- dev apply --config ./examples/lusid.toml --machine a
+# List the machines defined in the nginx-cluster example.
+nginx-cluster-list:
+  cargo run -p lusid --release -- --config ./examples/nginx-cluster/lusid.toml machines list
 
-lusid-dev-a-ssh:
-  cargo run -p lusid --release -- dev ssh --config ./examples/lusid.toml --machine a
+# Boot the web-a VM (if not already running) and apply the plan to it.
+nginx-cluster-apply-a: build-lusid-apply
+  cargo run -p lusid --release -- --config ./examples/nginx-cluster/lusid.toml dev apply --machine web-a
 
-lusid-dev-b-apply: build-lusid-apply
-  cargo run -p lusid --release -- dev apply --config ./examples/lusid.toml --machine b
+# Boot the web-b VM (if not already running) and apply the plan to it.
+nginx-cluster-apply-b: build-lusid-apply
+  cargo run -p lusid --release -- --config ./examples/nginx-cluster/lusid.toml dev apply --machine web-b
 
-lusid-dev-b-ssh:
-  cargo run -p lusid --release -- dev ssh --config ./examples/lusid.toml --machine b
+# Open an SSH session to the web-a dev VM (e.g. to `curl localhost`).
+nginx-cluster-ssh-a:
+  cargo run -p lusid --release -- --config ./examples/nginx-cluster/lusid.toml dev ssh --machine web-a
 
-lusid-apply-example-simple:
-  cargo run -p lusid-apply --release -- --root . --plan ./examples/simple-debian.lusid --params '{ "whatever": true }' --log trace
+# Open an SSH session to the web-b dev VM.
+nginx-cluster-ssh-b:
+  cargo run -p lusid --release -- --config ./examples/nginx-cluster/lusid.toml dev ssh --machine web-b
 
-lusid-apply-example-multi:
-  cargo run -p lusid-apply --release -- --root . --plan ./examples/multi.lusid --log trace
+# -----------------------------------------------------------------------------
+# Example: examples/arch-desktop
+#
+# One Arch Linux x86-64 machine with a minimal XFCE desktop + LightDM.
+
+# List the machines defined in the arch-desktop example.
+arch-desktop-list:
+  cargo run -p lusid --release -- --config ./examples/arch-desktop/lusid.toml machines list
+
+# Boot the desktop VM, apply the plan, and watch LightDM appear in the QEMU window.
+arch-desktop-apply: build-lusid-apply
+  cargo run -p lusid --release -- --config ./examples/arch-desktop/lusid.toml dev apply --machine desktop
+
+# Open an SSH session to the desktop dev VM.
+arch-desktop-ssh:
+  cargo run -p lusid --release -- --config ./examples/arch-desktop/lusid.toml dev ssh --machine desktop

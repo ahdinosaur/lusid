@@ -80,9 +80,6 @@ pub enum SystemdStateError {
     #[error(transparent)]
     Command(#[from] CommandError),
 
-    #[error("systemd unit not found: {name}")]
-    UnitNotFound { name: String },
-
     #[error("failed to parse systemctl show output: missing {field}")]
     MissingField { field: &'static str },
 
@@ -201,8 +198,17 @@ impl ResourceType for Systemd {
         let load_state =
             load_state.ok_or(SystemdStateError::MissingField { field: "LoadState" })?;
         if load_state == "not-found" {
-            return Err(SystemdStateError::UnitNotFound {
-                name: resource.name.clone(),
+            // An absent unit file is a valid "nothing here yet" state, not an error —
+            // the same shape as apt/pacman's `NotInstalled`. State probing runs once
+            // up front before any operations, so a systemd resource whose unit file
+            // will be provided by an earlier epoch (e.g. `@core/pacman` installing
+            // `lightdm`) legitimately reports not-found at probe time. Represent it
+            // as disabled+inactive; the later `systemctl enable|start` op then runs
+            // after the unit is on disk. If the unit is still missing at operation
+            // time, systemctl's own stderr surfaces through the apply.
+            return Ok(SystemdState {
+                enabled: false,
+                active: false,
             });
         }
 

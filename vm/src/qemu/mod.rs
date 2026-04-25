@@ -152,7 +152,9 @@ impl Qemu {
 
     pub fn graphics(&mut self, enabled: bool) -> &mut Self {
         if !enabled {
-            self.command.arg("-nographic");
+            // `-display none` instead of `-nographic`: the latter redirects serial
+            // to stdio and conflicts with `-daemonize`.
+            self.command.args(["-display", "none"]);
         }
         self
     }
