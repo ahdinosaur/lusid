@@ -10,6 +10,7 @@ mod paths;
 use std::path::{Path, PathBuf};
 
 use lusid_http::{HttpClient, HttpError};
+use lusid_secrets::Secrets;
 use thiserror::Error;
 
 pub use crate::paths::{Paths, PathsError};
@@ -23,12 +24,14 @@ pub enum ContextError {
     Http(#[from] HttpError),
 }
 
-/// Runtime context for a lusid invocation — plan root, XDG paths, HTTP client.
+/// Runtime context for a lusid invocation — plan root, XDG paths, HTTP client,
+/// decrypted secrets bundle.
 #[derive(Debug, Clone)]
 pub struct Context {
     root: PathBuf,
     paths: Paths,
     http: HttpClient,
+    secrets: Secrets,
 }
 
 impl Context {
@@ -39,6 +42,7 @@ impl Context {
             root: root.to_path_buf(),
             paths,
             http,
+            secrets: Secrets::empty(),
         })
     }
 
@@ -52,5 +56,13 @@ impl Context {
 
     pub fn http_client(&mut self) -> &mut HttpClient {
         &mut self.http
+    }
+
+    pub fn secrets(&self) -> &Secrets {
+        &self.secrets
+    }
+
+    pub fn set_secrets(&mut self, secrets: Secrets) {
+        self.secrets = secrets;
     }
 }

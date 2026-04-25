@@ -6,12 +6,13 @@ use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_operation::{
-    Operation,
     operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
+    Operation,
 };
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
+use secrecy::ExposeSecret;
 use serde::Deserialize;
 use thiserror::Error;
 
@@ -54,12 +55,35 @@ impl_display_render!(FileParams);
 
 #[derive(Debug, Clone)]
 pub enum FileResource {
-    Sourced { source: FilePath, path: FilePath },
-    Present { path: FilePath },
-    Absent { path: FilePath },
-    Mode { path: FilePath, mode: FileMode },
-    User { path: FilePath, user: FileUser },
-    Group { path: FilePath, group: FileGroup },
+    Sourced {
+        source: FilePath,
+        path: FilePath,
+    },
+    /// Contents sourced from a decrypted secret by name; resolved against
+    /// [`Context::secrets`] at state/apply time so plaintext never travels
+    /// through the resource/change tree. See `@core/secret`.
+    Secret {
+        name: String,
+        path: FilePath,
+    },
+    Present {
+        path: FilePath,
+    },
+    Absent {
+        path: FilePath,
+    },
+    Mode {
+        path: FilePath,
+        mode: FileMode,
+    },
+    User {
+        path: FilePath,
+        user: FileUser,
+    },
+    Group {
+        path: FilePath,
+        group: FileGroup,
+    },
 }
 
 impl Display for FileResource {
@@ -67,6 +91,9 @@ impl Display for FileResource {
         match self {
             FileResource::Sourced { source, path } => {
                 write!(f, "FileSourced({source} -> {path})")
+            }
+            FileResource::Secret { name, path } => {
+                write!(f, "FileSecret(secret = {name} -> {path})")
             }
             FileResource::Present { path } => write!(f, "FilePresent({path})"),
             FileResource::Absent { path } => write!(f, "FileAbsent({path})"),
@@ -118,6 +145,14 @@ impl_display_render!(FileState);
 pub enum FileStateError {
     #[error(transparent)]
     Fs(#[from] FsError),
+
+    /// Fires at state probe time when diffing on-disk contents against a
+    /// declared secret. Apply-side twin:
+    /// [`FileApplyError::MissingSecret`](lusid_operation::operations::file::FileApplyError::MissingSecret).
+    #[error(
+        "secret {name:?} referenced by file resource was not found in decrypted secrets bundle"
+    )]
+    MissingSecret { name: String },
 }
 
 #[derive(Debug, Clone)]
@@ -155,6 +190,9 @@ impl Display for FileChange {
                     "File::Write(path = {}, source = Path({}))",
                     path, source_path
                 ),
+                FileSource::Secret(name) => {
+                    write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
+                }
             },
             FileChange::Remove { path } => write!(f, "File::Remove(path = {path})"),
             FileChange::ChangeMode { path, mode } => {
@@ -315,7 +353,7 @@ impl ResourceType for File {
     type StateError = FileStateError;
 
     async fn state(
-        _ctx: &mut Context,
+        ctx: &mut Context,
         resource: &Self::Resource,
     ) -> Result<Self::State, Self::StateError> {
         let state = match resource {
@@ -326,6 +364,27 @@ impl ResourceType for File {
                     let source_contents = fs::read_file_to_bytes(source.as_path()).await?;
                     let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
                     if source_contents == path_contents {
+                        FileState::Sourced
+                    } else {
+                        FileState::NotSourced
+                    }
+                }
+            }
+
+            FileResource::Secret { name, path } => {
+                if !fs::path_exists(path.as_path()).await? {
+                    FileState::NotSourced
+                } else {
+                    // Compare the file's current contents against the
+                    // decrypted secret plaintext. A missing secret here
+                    // (e.g. typo in the plan's `name` field) surfaces as
+                    // `MissingSecret` rather than a silent NotSourced.
+                    let secret = ctx
+                        .secrets()
+                        .get(name)
+                        .ok_or_else(|| FileStateError::MissingSecret { name: name.clone() })?;
+                    let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
+                    if path_contents.as_slice() == secret.expose_secret().as_bytes() {
                         FileState::Sourced
                     } else {
                         FileState::NotSourced
@@ -399,6 +458,15 @@ impl ResourceType for File {
             }
 
             (FileResource::Sourced { .. }, FileState::Sourced) => None,
+
+            (FileResource::Secret { name, path }, FileState::NotSourced) => {
+                Some(FileChange::Write {
+                    path: path.clone(),
+                    source: FileSource::Secret(name.clone()),
+                })
+            }
+
+            (FileResource::Secret { .. }, FileState::Sourced) => None,
 
             (FileResource::Present { path }, FileState::Absent) => Some(FileChange::Write {
                 path: path.clone(),

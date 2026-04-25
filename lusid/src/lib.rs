@@ -25,7 +25,9 @@ use clap::{Parser, Subcommand};
 use lusid_apply_stdio::AppViewError;
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
-use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshVolume};
+use lusid_secrets::cli::{CliEnv as SecretsCliEnv, CliError as SecretsCliError, SecretsCommand};
+use lusid_secrets::{ReencryptForMachineError, reencrypt_for_machine};
+use lusid_ssh::{Ssh, SshConnectOptions, SshError, SshKeypairError, SshVolume};
 use lusid_vm::{Vm, VmError, VmOptions};
 use thiserror::Error;
 use tracing::error;
@@ -59,6 +61,17 @@ pub struct Cli {
 
     #[arg(env = "LUSID_APPLY_LINUX_AARCH64", global = true)]
     pub lusid_apply_linux_aarch64_path: Option<String>,
+
+    /// Override `<root>/secrets` as the secrets directory (location of
+    /// `lusid-secrets.toml` and `*.age` ciphertexts).
+    #[arg(long = "secrets-dir", env = "LUSID_SECRETS_DIR", global = true)]
+    pub secrets_dir: Option<PathBuf>,
+
+    /// Path to an age identity file. Required by `local apply`,
+    /// `secrets cat`, `secrets edit`, and `secrets rekey`; ignored by
+    /// `secrets ls`, `secrets check`, and `secrets keygen`.
+    #[arg(long = "identity", env = "LUSID_IDENTITY", global = true)]
+    pub identity: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -82,6 +95,11 @@ pub enum Cmd {
     Dev {
         #[command(subcommand)]
         command: DevCmd,
+    },
+    #[doc = " Manage age-encrypted project secrets"]
+    Secrets {
+        #[command(subcommand)]
+        command: SecretsCommand,
     },
 }
 
@@ -162,6 +180,15 @@ pub enum AppError {
 
     #[error(transparent)]
     Tui(#[from] TuiError),
+
+    #[error(transparent)]
+    Secrets(#[from] SecretsCliError),
+
+    #[error("failed to re-encrypt secrets for target: {0}")]
+    ReencryptSecrets(#[from] ReencryptForMachineError),
+
+    #[error("failed to serialize VM SSH keypair: {0}")]
+    SshKeypair(#[from] SshKeypairError),
 }
 
 /// Resolve the config path (CLI flag → `LUSID_CONFIG` env → CWD → `.`) and
@@ -179,22 +206,35 @@ pub async fn get_config(cli: &Cli) -> Result<Config, AppError> {
 
 /// Dispatch on the parsed subcommand.
 pub async fn run(cli: Cli, config: Config) -> Result<(), AppError> {
+    let secrets_dir = resolve_secrets_dir(&cli, &config);
+    let identity_path = cli.identity.clone();
     match cli.command {
         Cmd::Machines { command } => match command {
             MachinesCmd::List => cmd_machines_list(config).await,
         },
         Cmd::Local { command } => match command {
-            LocalCmd::Apply => cmd_local_apply(config).await,
+            LocalCmd::Apply => cmd_local_apply(config, secrets_dir, identity_path).await,
         },
         Cmd::Remote { command } => match command {
             RemoteCmd::Apply { machine_id } => cmd_remote_apply(config, machine_id).await,
             RemoteCmd::Ssh { machine_id } => cmd_remote_ssh(config, machine_id).await,
         },
         Cmd::Dev { command } => match command {
-            DevCmd::Apply { machine_id } => cmd_dev_apply(config, machine_id).await,
+            DevCmd::Apply { machine_id } => {
+                cmd_dev_apply(config, machine_id, secrets_dir, identity_path).await
+            }
             DevCmd::Ssh { machine_id } => cmd_dev_ssh(config, machine_id).await,
         },
+        Cmd::Secrets { command } => cmd_secrets(command, secrets_dir, identity_path).await,
     }
+}
+
+/// CLI flag wins over `<root>/secrets` default. No `lusid.toml` field for
+/// this yet — add one only once a real project needs to override.
+fn resolve_secrets_dir(cli: &Cli, config: &Config) -> PathBuf {
+    cli.secrets_dir
+        .clone()
+        .unwrap_or_else(|| config.root().join("secrets"))
 }
 
 async fn cmd_machines_list(config: Config) -> Result<(), AppError> {
@@ -202,10 +242,26 @@ async fn cmd_machines_list(config: Config) -> Result<(), AppError> {
     Ok(())
 }
 
+async fn cmd_secrets(
+    command: SecretsCommand,
+    secrets_dir: PathBuf,
+    identity_path: Option<PathBuf>,
+) -> Result<(), AppError> {
+    let env = SecretsCliEnv {
+        secrets_dir,
+        identity_path,
+    };
+    lusid_secrets::cli::run(command, env).await?;
+    Ok(())
+}
+
 // Spawns `lusid-apply` as a subprocess and pipes its stdout + stderr into
-// the TUI. `Command::output` here returns streaming handles, not a finished
-// `std::process::Output` — naming is from `lusid_cmd`, not `std`.
-async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
+// the TUI.
+async fn cmd_local_apply(
+    config: Config,
+    secrets_dir: PathBuf,
+    identity_path: Option<PathBuf>,
+) -> Result<(), AppError> {
     let Config {
         ref lusid_apply_linux_x86_64_path,
         ..
@@ -216,7 +272,12 @@ async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
     command
         .args(["--root", &config.root().to_string_lossy()])
         .args(["--plan", &plan.to_string_lossy()])
-        .args(["--log", &config.log]);
+        .args(["--log", &config.log])
+        .args(["--secrets-dir", &secrets_dir.to_string_lossy()]);
+
+    if let Some(identity_path) = identity_path.as_deref() {
+        command.args(["--identity", &identity_path.to_string_lossy()]);
+    }
 
     if let Some(params) = params {
         let params_json = serde_json::to_string(&params)?;
@@ -238,6 +299,18 @@ async fn cmd_local_apply(config: Config) -> Result<(), AppError> {
 // from config, connect to its hostname over SSH (using either agent auth or
 // a configured key), upload the plan + lusid-apply binary, run apply, and
 // pipe through the TUI — essentially `cmd_dev_*` without the VM bring-up.
+//
+// Secrets strategy: mirror `cmd_dev_apply`'s per-target re-encryption, with
+// two substitutions:
+//   - Recipient key is the target machine's entry in `lusid-secrets.toml`'s
+//     `[machines]` table — looked up by `machine_id` — rather than an
+//     ephemeral VM auth key. `lusid_secrets` will need a small helper to
+//     expose that lookup; the CLI doesn't have `Recipients` access directly.
+//   - Guest identity is the target's existing
+//     `/etc/ssh/ssh_host_ed25519_key` on the machine itself — nothing is
+//     SFTP'd for the identity; just pass `--identity=/etc/ssh/ssh_host_ed25519_key`
+//     (plus `--guest-mode --secrets-dir=...`). Requires the guest
+//     `lusid-apply` to run as root, which it typically does already.
 async fn cmd_remote_apply(_config: Config, _machine_id: String) -> Result<(), AppError> {
     todo!()
 }
@@ -251,7 +324,20 @@ async fn cmd_remote_ssh(_config: Config, _machine_id: String) -> Result<(), AppE
 // apply remotely and stream its stdout/stderr through the TUI just like
 // local apply. The VM's SSH keypair lives inside its instance dir (see
 // `lusid_vm`).
-async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppError> {
+//
+// Secrets are forwarded via per-target re-encryption: when `identity_path`
+// is set, the host decrypts every `*.age` with the operator identity,
+// re-encrypts each plaintext to the VM's SSH keypair alone, ships the
+// ciphertexts to `<dev_dir>/secrets/`, and points the guest's
+// `lusid-apply` at `<dev_dir>/identity` (the same VM keypair in OpenSSH
+// PEM form) via `--identity --guest-mode`. The operator identity never
+// leaves the host.
+async fn cmd_dev_apply(
+    config: Config,
+    machine_id: String,
+    secrets_dir: PathBuf,
+    identity_path: Option<PathBuf>,
+) -> Result<(), AppError> {
     let MachineConfig {
         plan,
         machine,
@@ -270,8 +356,10 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
     };
     let vm = Vm::run(&mut ctx, options).await?;
 
+    let vm_keypair = vm.ssh_keypair().await?;
+
     let mut ssh = Ssh::connect(SshConnectOptions {
-        private_key: vm.ssh_keypair().await?.private_key,
+        private_key: vm_keypair.private_key.clone(),
         addrs: (Ipv4Addr::LOCALHOST, vm.ssh_port),
         username: vm.user.clone(),
         config: Arc::new(Default::default()),
@@ -284,7 +372,7 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
     let plan_filename = plan.file_name().unwrap().to_string_lossy();
     let apply_bin = which(&config.lusid_apply_linux_x86_64_path)?;
 
-    let volumes = vec![
+    let mut volumes = vec![
         SshVolume::FilePath {
             local: apply_bin,
             remote: format!("{dev_dir}/lusid-apply"),
@@ -295,11 +383,49 @@ async fn cmd_dev_apply(config: Config, machine_id: String) -> Result<(), AppErro
         },
     ];
 
+    // Secrets forwarding mirrors `cmd_local_apply`'s gating on
+    // `identity_path`: no identity → no secrets shipped, and the guest
+    // will run without a secrets context (plans referencing
+    // `@core/secret` will error loudly).
+    let guest_identity_path = format!("{dev_dir}/identity");
+    let guest_secrets_dir = format!("{dev_dir}/secrets");
+    let forward_secrets = if let Some(identity_path) = identity_path.as_deref() {
+        // The VM's auth keypair doubles as the age recipient/identity: it
+        // already lives on both sides (instance dir on host, authorized_keys
+        // on guest via cloud-init), is ephemeral per-VM, and re-using it
+        // avoids a second keygen + a cloud-init host-key injection path.
+        let machine_pubkey = vm_keypair.public_openssh()?;
+        let reencrypted =
+            reencrypt_for_machine(identity_path, &secrets_dir, &machine_pubkey).await?;
+
+        let private_pem = vm_keypair.private_openssh()?;
+        volumes.push(SshVolume::FileBytes {
+            local: private_pem.into_bytes(),
+            permissions: Some(0o600),
+            remote: guest_identity_path.clone(),
+        });
+        for secret in reencrypted {
+            volumes.push(SshVolume::FileBytes {
+                local: secret.ciphertext,
+                permissions: None,
+                remote: format!("{guest_secrets_dir}/{}.age", secret.stem),
+            });
+        }
+        true
+    } else {
+        false
+    };
+
     let log = &config.log;
     let mut command = format!(
         "{dev_dir}/lusid-apply --root {} --plan {dev_dir}/plan/{plan_filename} --log {log}",
         root.display()
     );
+    if forward_secrets {
+        command.push_str(&format!(
+            " --guest-mode --identity {guest_identity_path} --secrets-dir {guest_secrets_dir}"
+        ));
+    }
     if let Some(params) = params {
         let params_json = serde_json::to_string(&params)?;
         command.push_str(&format!(" --params '{params_json}'"));
