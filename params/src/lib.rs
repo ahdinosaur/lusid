@@ -66,19 +66,42 @@ use thiserror::Error;
 /// grows a `Value::Secret`, this round-trip is an accepted limitation.
 pub type Secret = Arc<SecretBox<String>>;
 
-/// Rimu tag applied to a [`ParamValue::HostPath`] when it is exposed back to
-/// Rimu (e.g. as a `params.*` field inside a plan's `setup`). The tagged inner
-/// is the fully-resolved absolute path as a string. The tag lets downstream
-/// validation discriminate it from a raw string or a [`TARGET_PATH_TAG`]-tagged
-/// value — a `params.some_host_path` forwarded to a nested module's `HostPath`
-/// field passes through without being re-resolved against the nested source's
-/// directory, and a `params.some_target_path` passed there fails with a
-/// type mismatch instead of silently succeeding.
+/// Identifier for the host-path kind. Same string serves two roles:
+///
+/// - **Schema discriminator**: `{type: "host-path"}` in a Rimu schema parses to
+///   [`ParamType::HostPath`] (see [`ParamType::from_rimu`]).
+/// - **Value tag**: a [`ParamValue::HostPath`] exposed back to Rimu becomes
+///   [`Value::Tagged`] with this string, so a nested plan / core module can
+///   discriminate a forwarded resolved path from a raw user string (and
+///   reject a [`TARGET_PATH_TAG`]-tagged value passed into a `HostPath` field).
+///
+/// They share one constant because they're the same concept — "this value is a
+/// host-path".
 pub const HOST_PATH_TAG: &str = "host-path";
 
-/// Rimu tag applied to a [`ParamValue::TargetPath`] when it is exposed back to
-/// Rimu. Mirrors [`HOST_PATH_TAG`] — see there for rationale.
+/// Identifier for the target-path kind. Mirrors [`HOST_PATH_TAG`] — see there.
 pub const TARGET_PATH_TAG: &str = "target-path";
+
+/// Controls whether [`ParamValue::HostPath`] / [`ParamValue::TargetPath`] are
+/// wrapped in [`Value::Tagged`] when converting back to Rimu.
+///
+/// The schema/validation side ([`ParamValue::from_rimu_spanned`],
+/// [`validate_type`]) accepts both shapes — this enum picks which one we
+/// *produce* downstream.
+#[derive(Debug, Clone, Copy)]
+pub enum PathExposure {
+    /// Wrap in [`Value::Tagged`] with [`HOST_PATH_TAG`] / [`TARGET_PATH_TAG`].
+    /// Used when feeding params back into Rimu for a plan's `setup`
+    /// evaluation: a nested plan / core module receiving the value can
+    /// discriminate a forwarded resolved path from a raw user string.
+    Tagged,
+    /// Emit as a plain [`Value::String`]. Used by [`ParamValues::into_type`]
+    /// for the serde round-trip into a typed resource params struct — the
+    /// Tagged shape (an envelope object with `__rimu_tag` / `__rimu_value` /
+    /// `__rimu_meta` keys) doesn't deserialise into the `String` / `PathBuf`
+    /// newtype fields the resource layer uses.
+    Plain,
+}
 
 /// Schema node: the allowed shape of a single value.
 ///
@@ -172,43 +195,53 @@ pub enum ParamValue {
 }
 
 impl ParamValue {
-    pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
+    pub fn into_rimu_spanned(value: Spanned<Self>, shape: PathExposure) -> Spanned<Value> {
         let (value, span) = value.take();
-        let rimu_value = value.into_rimu(span.clone());
+        let rimu_value = value.into_rimu(span.clone(), shape);
         Spanned::new(rimu_value, span)
     }
 
     /// `span` is used as the span for the inner [`Spanned<Value>`] of any
-    /// [`Value::Tagged`] wrappers produced for `HostPath` / `TargetPath`.
-    pub fn into_rimu(self, span: Span) -> Value {
+    /// [`Value::Tagged`] wrappers produced for `HostPath` / `TargetPath` when
+    /// `shape == PathExposure::Tagged`.
+    pub fn into_rimu(self, span: Span, shape: PathExposure) -> Value {
         match self {
             ParamValue::Literal(value) => value,
             ParamValue::Boolean(value) => Value::Boolean(value),
             ParamValue::String(value) => Value::String(value),
             ParamValue::Number(number) => Value::Number(number),
             ParamValue::List(items) => {
-                let items = items.into_iter().map(Self::into_rimu_spanned).collect();
+                let items = items
+                    .into_iter()
+                    .map(|item| Self::into_rimu_spanned(item, shape))
+                    .collect();
                 Value::List(items)
             }
             ParamValue::Object(map) => {
                 let map = map
                     .into_iter()
-                    .map(|(key, value)| (key, Self::into_rimu_spanned(value)))
+                    .map(|(key, value)| (key, Self::into_rimu_spanned(value, shape)))
                     .collect();
                 Value::Object(map)
             }
-            ParamValue::HostPath(path) => Value::Tagged {
-                tag: HOST_PATH_TAG.to_string(),
-                inner: Box::new(Spanned::new(
-                    Value::String(path.to_string_lossy().into_owned()),
-                    span,
-                )),
-                meta: Default::default(),
-            },
-            ParamValue::TargetPath(path) => Value::Tagged {
-                tag: TARGET_PATH_TAG.to_string(),
-                inner: Box::new(Spanned::new(Value::String(path), span)),
-                meta: Default::default(),
+            ParamValue::HostPath(path) => {
+                let path_str = path.to_string_lossy().into_owned();
+                match shape {
+                    PathExposure::Tagged => Value::Tagged {
+                        tag: HOST_PATH_TAG.to_string(),
+                        inner: Box::new(Spanned::new(Value::String(path_str), span)),
+                        meta: Default::default(),
+                    },
+                    PathExposure::Plain => Value::String(path_str),
+                }
+            }
+            ParamValue::TargetPath(path) => match shape {
+                PathExposure::Tagged => Value::Tagged {
+                    tag: TARGET_PATH_TAG.to_string(),
+                    inner: Box::new(Spanned::new(Value::String(path), span)),
+                    meta: Default::default(),
+                },
+                PathExposure::Plain => Value::String(path),
             },
             ParamValue::Secret(secret) => Value::String(secret.expose_secret().to_owned()),
         }
@@ -438,16 +471,16 @@ impl ParamValues {
         Ok(Spanned::new(ParamValues(param_values), span))
     }
 
-    pub fn into_rimu_spanned(value: Spanned<Self>) -> Spanned<Value> {
+    pub fn into_rimu_spanned(value: Spanned<Self>, shape: PathExposure) -> Spanned<Value> {
         let (value, span) = value.take();
-        Spanned::new(value.into_rimu(), span)
+        Spanned::new(value.into_rimu(shape), span)
     }
 
-    pub fn into_rimu(self) -> Value {
+    pub fn into_rimu(self, shape: PathExposure) -> Value {
         let object = self
             .0
             .into_iter()
-            .map(|(key, value)| (key, ParamValue::into_rimu_spanned(value)))
+            .map(|(key, value)| (key, ParamValue::into_rimu_spanned(value, shape)))
             .collect();
         Value::Object(object)
     }
@@ -460,7 +493,9 @@ impl ParamValues {
     where
         T: DeserializeOwned,
     {
-        let value = self.into_rimu();
+        // Plain: a typed resource params struct expects `String` / `PathBuf`
+        // newtype fields, which cannot deserialise the Tagged envelope shape.
+        let value = self.into_rimu(PathExposure::Plain);
         let serde_value = SerdeValue::from(value);
         from_serde_value(serde_value)
     }
@@ -507,8 +542,8 @@ impl FromRimu for ParamType {
             "boolean" => Ok(ParamType::Boolean),
             "string" => Ok(ParamType::String),
             "number" => Ok(ParamType::Number),
-            "host-path" => Ok(ParamType::HostPath),
-            "target-path" => Ok(ParamType::TargetPath),
+            HOST_PATH_TAG => Ok(ParamType::HostPath),
+            TARGET_PATH_TAG => Ok(ParamType::TargetPath),
             "secret" => Ok(ParamType::Secret),
             "list" => {
                 let item = object
@@ -974,13 +1009,13 @@ mod tests {
     #[test]
     fn host_path_round_trips_through_tagged_value() {
         // Parent validated a HostPath into an absolute PathBuf, then exposed it
-        // back to Rimu via `into_rimu` — that's a tagged value. A nested module
-        // receiving it as HostPath should re-parse to the same absolute path
-        // without re-resolving against the nested source's directory.
+        // back to Rimu via `into_rimu` (Tagged shape) — that's a tagged value.
+        // A nested module receiving it as HostPath should re-parse to the same
+        // absolute path without re-resolving against the nested source's dir.
         let param = spanned(ParamValue::HostPath(PathBuf::from(
             "/plans/parent/gitconfig",
         )));
-        let rimu_value = ParamValue::into_rimu_spanned(param.clone());
+        let rimu_value = ParamValue::into_rimu_spanned(param.clone(), PathExposure::Tagged);
 
         assert!(matches!(
             rimu_value.inner(),
@@ -1015,5 +1050,38 @@ mod tests {
         let value = spanned(tagged_string(HOST_PATH_TAG, "/plans/parent/gitconfig"));
         let err = validate_type(&typ, &value).unwrap_err();
         assert!(matches!(err, ValidateValueError::TypeMismatch { .. }));
+    }
+
+    #[test]
+    fn into_type_emits_plain_strings_for_host_and_target_paths() {
+        // Regression: `ParamValues::into_type` is the path used by
+        // `plan/src/core.rs` to deserialise into resource params structs whose
+        // path fields are `String` / `PathBuf` newtypes. The Tagged envelope
+        // shape can't deserialise into those, so paths must be flattened to
+        // plain `Value::String` on the serde path.
+        use serde::Deserialize;
+
+        #[derive(Deserialize, Debug)]
+        struct Sourced {
+            source: String,
+            path: String,
+        }
+
+        let mut inner = IndexMap::new();
+        inner.insert(
+            "source".to_string(),
+            Spanned::new(
+                ParamValue::HostPath(PathBuf::from("/abs/foo.txt")),
+                test_span(),
+            ),
+        );
+        inner.insert(
+            "path".to_string(),
+            Spanned::new(ParamValue::TargetPath("/etc/foo".to_string()), test_span()),
+        );
+        let pv = ParamValues(inner);
+        let v: Sourced = pv.into_type().expect("paths must serde as plain strings");
+        assert_eq!(v.source, "/abs/foo.txt");
+        assert_eq!(v.path, "/etc/foo");
     }
 }

@@ -20,7 +20,7 @@
 //! activation. See `lusid_params::Secret`'s doc for the wider context.
 
 use displaydoc::Display;
-use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct};
+use lusid_params::{ParamValues, ParamValuesFromRimuError, ParamsStruct, PathExposure};
 use lusid_secrets::Secrets;
 use lusid_system::System;
 use rimu::{SourceId, Span, Spanned, Value, ValueObject, call};
@@ -98,7 +98,7 @@ pub(crate) fn evaluate(
                 params_struct.expect("params struct should exist if params value exists");
             let param_values = ParamValues::from_rimu_spanned(params_value, params_struct)
                 .map_err(|error| EvalError::Params(Box::new(error)))?;
-            let value = ParamValues::into_rimu_spanned(param_values);
+            let value = ParamValues::into_rimu_spanned(param_values, PathExposure::Tagged);
             vec![value, ctx_value]
         }
     };
