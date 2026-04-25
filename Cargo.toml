@@ -25,6 +25,7 @@ members = [
 
 [workspace.dependencies]
 age = "0.11.2"
+age-core = "0.11"
 async-trait = "0.1.89"
 clap = { version = "4.5.52", features = ["derive", "env"] }
 displaydoc = "0.2.5"
