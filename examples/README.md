@@ -2,20 +2,16 @@
 
 Runnable, end-to-end examples of configuring real machines with lusid.
 
-Each example is a self-contained directory with its own `lusid.toml`, one
-or more `.lusid` plan files, and a README that walks through what the plan
-does and how to try it.
+Each example is a self-contained directory with its own `lusid.toml`, one or more `.lusid` plan files, and a README that walks through what the plan does and how to try it.
 
 ## Prerequisites
 
 Before running any example, you'll need:
 
 - **Rust toolchain** (stable) to build lusid itself.
-- **[just](https://github.com/casey/just)** to run the recipes in the
-  top-level `justfile`. The recipes are just wrappers around `cargo run`
-  with the right arguments — you can run them by hand instead if you prefer.
-- **QEMU + libguestfs + mkisofs** if you want to use the `dev apply` /
-  `dev ssh` flow (local VMs). On Debian:
+- **[just](https://github.com/casey/just)** to run the recipes in the top-level `justfile`. The recipes are just wrappers around `cargo run` with the right arguments — you can run them by hand instead if you prefer.
+- **QEMU + libguestfs + mkisofs** if you want to use the `dev apply` / `dev ssh` flow (local VMs).
+  On Debian:
   ```sh
   sudo apt install qemu-system-x86 qemu-utils libguestfs-tools genisoimage
   ```
@@ -24,8 +20,7 @@ Before running any example, you'll need:
   sudo pacman -S qemu-full libguestfs cdrtools
   ```
 
-None of these are needed if you're only applying plans to machines you
-already have (via `lusid local apply`).
+None of these are needed if you're only applying plans to machines you already have (via `lusid local apply`).
 
 ## Examples
 
@@ -33,11 +28,6 @@ already have (via `lusid local apply`).
 | --- | --- | --- |
 | [`nginx-cluster/`](./nginx-cluster/) | Two Debian servers, each running nginx with a per-machine greeting page. Shows multi-machine configs, per-machine `params`, and dependency ordering between resources. | Debian 13 |
 | [`arch-desktop/`](./arch-desktop/) | One Arch Linux machine running a minimal XFCE desktop with LightDM. Shows installing a group of packages and enabling a display-manager service. | Arch Linux |
-
-Each example's README explains the plan line-by-line and shows both the
-dev-VM flow and how to apply the same plan to a real machine.
-
-## The general shape of an example
 
 Every example follows the same structure:
 
@@ -48,10 +38,6 @@ Every example follows the same structure:
 └── <plan>.lusid     # the Rimu plan file(s)
 ```
 
-`lusid.toml` is the top-level config the `lusid` CLI reads. It lists the
-machines you want to manage and pairs each with a plan. A plan (written in
-[Rimu](https://rimu.dev)) exports a `setup(params, system) => [...]`
-function that returns the list of resources to apply.
+`lusid.toml` is the top-level config the `lusid` CLI reads. It lists the machines you want to manage and pairs each with a plan. A plan (written in [Rimu](https://rimu.dev)) exports a `setup(params, system) => [...]` function that returns the list of resources to apply.
 
-See the top-level [README](../README.md#concepts) for the full concept
-reference (Plan, Resource, Operation, Epoch).
+See the top-level [README](../README.md#concepts) for the full concept reference (Plan, Resource, Operation, Epoch).

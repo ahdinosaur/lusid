@@ -16,15 +16,10 @@ Lusid can be used for your workstations (desktops or laptops) or your servers (h
 
 ## Get Started
 
-The fastest way to see lusid in action is to run one of the [examples](./examples/):
+Check out the [examples](./examples/):
 
-- [`examples/nginx-cluster`](./examples/nginx-cluster/) — two Debian servers
-  each running nginx with a per-machine greeting.
-- [`examples/arch-desktop`](./examples/arch-desktop/) — one Arch machine
-  running a minimal XFCE desktop.
-
-Each example boots real QEMU VMs, applies a plan over SSH, and streams the
-result through lusid's TUI. They are the recommended starting point.
+- [`examples/nginx-cluster`](./examples/nginx-cluster/) — two Debian servers each running nginx with a per-machine greeting.
+- [`examples/arch-desktop`](./examples/arch-desktop/) — one Arch machine running a minimal XFCE desktop.
 
 ### Install
 
@@ -38,34 +33,23 @@ cargo build --release
 
 This produces two binaries under `./target/release/`:
 
-- `lusid` — the CLI you run: `lusid machines list`, `lusid local apply`,
-  `lusid dev apply`, ….
-- `lusid-apply` — the worker that actually evaluates + applies a plan.
-  `lusid` spawns this either locally or inside a dev VM over SSH.
+- `lusid` — the CLI you run: `lusid machines list`, `lusid local apply`, `lusid dev apply`, ….
+- `lusid-apply` — the worker that actually evaluates + applies a plan. `lusid` spawns this either locally or inside a dev VM over SSH.
 
-The `just` recipes in the repo root handle the cross-compile dance (a
-Linux `lusid-apply` is required to apply plans inside a Linux VM even if
-you're developing on a different OS). If you have [just](https://github.com/casey/just)
-installed:
+The `just` recipes in the repo root handle the cross-compile dance. If you have [just](https://github.com/casey/just) installed:
 
 ```sh
 just build-lusid-apply
 ```
 
-For running the `dev apply` / `dev ssh` flow you also need QEMU and a
-couple of image-building tools — see the
-[examples prerequisites](./examples/README.md#prerequisites) for the exact
-packages.
+For running the `dev apply` / `dev ssh` flow you also need QEMU and a couple of image-building tools — see the [examples prerequisites](./examples/README.md#prerequisites) for the exact packages.
 
 ### Create a plan
 
 A lusid project is just a directory with two files:
 
-- `lusid.toml` — lists the machines you want to manage and pairs each with
-  a plan file.
-- `*.lusid` — one or more plan files written in
-  [Rimu](https://rimu.dev), each exporting a `setup(params, system)`
-  function that returns a list of resources.
+- `lusid.toml` — lists the machines you want to manage and pairs each with a plan file.
+- `*.lusid` — one or more plan files written in [Rimu](https://rimu.dev), each exporting a `setup(params, system)` function that returns a list of resources.
 
 The smallest useful project is a single machine applying a single plan:
 
@@ -89,35 +73,28 @@ setup: (params, system) =>
       packages: ["curl", "git", "htop"]
 ```
 
-See the [examples](./examples/) for configs that use `params`, dependency
-ordering, and the `system` object (hostname, OS, current user).
+See the [examples](./examples/) for configs that use `params`, dependency ordering, and the `system` object (hostname, OS, current user).
 
 ### Apply a plan
 
 There are three ways to run a plan, depending on where the target machine is:
 
-**Local** — apply to the host you're sitting at. lusid picks the machine
-whose `hostname` matches `$(hostname)`.
+**Local** — apply to the host you're sitting at. lusid picks the machine config whose `hostname` matches `$(hostname)`.
 
 ```sh
 lusid --config ./lusid.toml local apply
 ```
 
-**Dev VM** — boot a local QEMU VM matching the machine's spec (OS, arch)
-and apply inside it. Great for iterating on a plan without touching your
-real machine:
+**Dev VM** — boot a local QEMU VM matching the machine's spec (OS, arch) and apply inside it. Great for iterating on a plan without touching your real machine:
 
 ```sh
 lusid --config ./lusid.toml dev apply --machine my-server
 lusid --config ./lusid.toml dev ssh   --machine my-server   # shell inside the VM
 ```
 
-**Remote** — apply to a machine you reach over SSH. Not implemented yet;
-tracked on the roadmap.
+**Remote** — apply to a machine you reach over SSH. Not implemented yet; tracked on the roadmap.
 
-Applying the same plan twice is always safe: lusid reads the current state
-of every resource and only runs the operations needed to close the gap.
-A no-op apply after a successful apply prints "no changes" and exits.
+Applying the same plan twice is always safe: lusid reads the current state of every resource and only runs the operations needed to close the gap. A no-op apply after a successful apply prints "no changes" and exits.
 
 ## Concepts
 
