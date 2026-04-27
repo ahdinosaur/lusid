@@ -14,19 +14,12 @@
 //! back at the offending line in the user's `.lusid` file. When adding a new type
 //! or error variant, keep the span all the way through.
 //!
-//! # Path-type conventions (see also AGENTS.md)
+//! # Path-type conventions
 //!
 //! - [`ParamType::HostPath`]: a **relative** string, resolved against the source
 //!   file's directory at value-conversion time (via [`rimu::Span::source`]).
 //! - [`ParamType::TargetPath`]: an **absolute** string, used as-is on the managed
 //!   machine.
-//!
-//! A resolved `HostPath` / `TargetPath` exposed back to Rimu (as a field of the
-//! `params` argument to a plan's `setup`) carries [`HOST_PATH_TAG`] /
-//! [`TARGET_PATH_TAG`] so a nested module receiving it as `HostPath` /
-//! `TargetPath` can distinguish a forwarded value from a raw user string — and
-//! can reject a cross-kind forward (e.g. a host path passed into a target-path
-//! field) with a type mismatch instead of silently accepting it.
 //!
 //! # Union semantics
 //!
@@ -39,7 +32,7 @@ use std::path::{Path, PathBuf};
 use displaydoc::Display;
 use indexmap::IndexMap;
 use rimu::{
-    Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject, from_serde_value,
+    from_serde_value, Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject,
 };
 use rimu_interop::{FromRimu, ToRimuError};
 use serde::de::DeserializeOwned;
@@ -53,12 +46,9 @@ use thiserror::Error;
 ///   [`Value::Tagged`] with this string, so a nested plan / core module can
 ///   discriminate a forwarded resolved path from a raw user string (and
 ///   reject a [`TARGET_PATH_TAG`]-tagged value passed into a `HostPath` field).
-///
-/// They share one constant because they're the same concept — "this value is a
-/// host-path".
 pub const HOST_PATH_TAG: &str = "host-path";
 
-/// Identifier for the target-path kind. Mirrors [`HOST_PATH_TAG`] — see there.
+/// Identifier for the target-path kind. Mirrors [`HOST_PATH_TAG`].
 pub const TARGET_PATH_TAG: &str = "target-path";
 
 /// Controls whether [`ParamValue::HostPath`] / [`ParamValue::TargetPath`] are
