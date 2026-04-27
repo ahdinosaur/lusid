@@ -35,7 +35,6 @@
 //! so authors should order from most-specific to most-general.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use displaydoc::Display;
 use indexmap::IndexMap;
@@ -43,28 +42,8 @@ use rimu::{
     Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject, from_serde_value,
 };
 use rimu_interop::{FromRimu, ToRimuError};
-use secrecy::{ExposeSecret, SecretBox};
 use serde::de::DeserializeOwned;
 use thiserror::Error;
-
-/// A secret plaintext string. Wrapped in [`Arc`] so `ParamValue::Clone` stays
-/// cheap, and in [`SecretBox<String>`] so `Debug` is redacted and the plaintext
-/// is zeroised when the last clone drops.
-///
-/// `SecretBox<String>` (rather than `secrecy::SecretString`, a.k.a. `SecretBox<str>`)
-/// is used because only the sized form implements `serde::Deserialize`, which is
-/// needed so resource param structs can deserialise a secret field.
-///
-/// Note(cc): the [`Secret`] wrapper protects the plaintext at the boundaries,
-/// but the plan evaluator has to hand secrets to Rimu as plain [`Value::String`]
-/// (see [`ParamValue::into_rimu`] below, and `secrets_value` in `plan/src/eval.rs`).
-/// Rimu is a general-purpose expression language with no notion of secrecy, so
-/// intermediate copies made by `+` concatenation, function calls, object/list
-/// construction etc. live as ordinary [`String`]s that are not zeroised. agenix
-/// / sops-nix sidestep this by materialising secrets at activation time and
-/// passing filenames through the evaluator instead of values. Until/unless Rimu
-/// grows a `Value::Secret`, this round-trip is an accepted limitation.
-pub type Secret = Arc<SecretBox<String>>;
 
 /// Identifier for the host-path kind. Same string serves two roles:
 ///
@@ -113,9 +92,6 @@ pub enum PathExposure {
 ///   semantics (relative vs absolute; see module docs). When exposed back to
 ///   Rimu they become [`Value::Tagged`] with [`HOST_PATH_TAG`] / [`TARGET_PATH_TAG`]
 ///   so a nested module can tell them apart from a raw string of the wrong kind.
-/// - `Secret` is `String` at the Rimu level, but materialises into a
-///   [`ParamValue::Secret`] so downstream code holds a redacted-on-Debug
-///   [`SecretString`] rather than plaintext.
 #[derive(Debug, Clone)]
 pub enum ParamType {
     Literal(Value),
@@ -126,7 +102,6 @@ pub enum ParamType {
     Object { value: Box<Spanned<ParamType>> },
     HostPath,
     TargetPath,
-    Secret,
 }
 
 #[derive(Debug, Clone)]
@@ -178,9 +153,6 @@ pub enum ParamTypes {
 /// Mirrors [`ParamType`] variants but holds a concrete value. Notably,
 /// `HostPath` becomes a fully-resolved absolute [`PathBuf`], so downstream
 /// consumers never need to know where the source file lived.
-///
-/// `Secret` wraps its plaintext in a [`Secret`] (an `Arc<SecretBox<String>>`) so
-/// clones are cheap and `Debug` stays redacted.
 #[derive(Debug, Clone)]
 pub enum ParamValue {
     Literal(Value),
@@ -191,7 +163,6 @@ pub enum ParamValue {
     Object(IndexMap<String, Spanned<ParamValue>>),
     HostPath(PathBuf),
     TargetPath(String),
-    Secret(Secret),
 }
 
 impl ParamValue {
@@ -243,7 +214,6 @@ impl ParamValue {
                 },
                 PathExposure::Plain => Value::String(path),
             },
-            ParamValue::Secret(secret) => Value::String(secret.expose_secret().to_owned()),
         }
     }
 }
@@ -380,9 +350,6 @@ impl ParamValue {
                     })
                 }
             }
-            (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Arc::new(
-                SecretBox::new(Box::new(value)),
-            ))),
             (typ, value) => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
                 typ: Box::new(typ),
                 value: Box::new(value),
@@ -544,7 +511,6 @@ impl FromRimu for ParamType {
             "number" => Ok(ParamType::Number),
             HOST_PATH_TAG => Ok(ParamType::HostPath),
             TARGET_PATH_TAG => Ok(ParamType::TargetPath),
-            "secret" => Ok(ParamType::Secret),
             "list" => {
                 let item = object
                     .swap_remove("item")
@@ -710,18 +676,6 @@ pub enum ValidateValueError {
         #[source]
         error: Box<ValidateValueError>,
     },
-
-    /// Expected a secret string, got Null — check that `ctx.secrets.<name>` matches an existing `<name>.age` file
-    //
-    // Note(cc): This is a partial mitigation for typos in `ctx.secrets.<name>`
-    // references. It only fires when the Null flows directly into a
-    // `ParamType::Secret` field. A Null that gets used in e.g. string
-    // concatenation or passed to a non-Secret param won't be caught here —
-    // see the `Note(cc)` in `plan/src/eval.rs` for the full fix (strict
-    // `ctx.secrets` map that errors at access time, which needs Rimu support).
-    NullSecret {
-        expected_type: Box<Spanned<ParamType>>,
-    },
 }
 
 #[derive(Debug, Clone, Error, Display)]
@@ -826,18 +780,6 @@ fn validate_type(
             {
                 Ok(())
             }
-            _ => Err(mismatch(param_type, value)),
-        },
-
-        ParamType::Secret => match value_inner {
-            // Note(cc): empty-string secrets pass — a secret file can legitimately
-            // contain an empty plaintext (rare, but not impossible). If we ever want
-            // to reject this, do it here with a dedicated error variant rather than
-            // reusing `NullSecret` (which speaks specifically about typo-on-lookup).
-            Value::String(_) => Ok(()),
-            Value::Null => Err(ValidateValueError::NullSecret {
-                expected_type: Box::new(param_type.clone()),
-            }),
             _ => Err(mismatch(param_type, value)),
         },
 

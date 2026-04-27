@@ -6,8 +6,7 @@
 //! 1. Reads the plan source from the [`Store`].
 //! 2. Parses + evaluates Rimu into a [`Plan`] (via [`load::load`]).
 //! 3. Validates user params against the plan's `params` schema.
-//! 4. Invokes the plan's `setup(params, ctx)` function to get a list of `PlanItem`s.
-//!    (`ctx` is `{ system, secrets }` — see [`eval`] for how it's synthesised.)
+//! 4. Invokes the plan's `setup(params, system)` function to get a list of `PlanItem`s.
 //! 5. For each item, either:
 //!    - If `module` starts with `@core/<id>` → convert to [`ResourceParams`] (a leaf).
 //!    - Otherwise → resolve the module as a sibling `.lusid` file, recurse, and attach
@@ -19,7 +18,6 @@
 use displaydoc::Display;
 use lusid_params::{ParamValuesFromRimuError, ParamsValidationError, validate};
 use lusid_resource::ResourceParams;
-use lusid_secrets::Secrets;
 use lusid_store::{Store, StoreError, StoreItemId};
 use lusid_system::System;
 use rimu::{Spanned, Value};
@@ -77,10 +75,9 @@ pub async fn plan(
     params_value: Option<Spanned<Value>>,
     store: &mut Store,
     system: &System,
-    secrets: &Secrets,
 ) -> Result<PlanTree<ResourceParams>, PlanError> {
     tracing::debug!("Plan {plan_id:?} with params {params_value:?}");
-    let children = plan_recursive(plan_id, params_value.as_ref(), store, system, secrets).await?;
+    let children = plan_recursive(plan_id, params_value.as_ref(), store, system).await?;
     let tree = PlanTree::Branch {
         children,
         meta: PlanMeta::default(),
@@ -96,7 +93,6 @@ async fn plan_recursive(
     params_value: Option<&Spanned<Value>>,
     store: &mut Store,
     system: &System,
-    secrets: &Secrets,
 ) -> Result<Vec<PlanTree<ResourceParams>>, PlanError> {
     let store_item_id: StoreItemId = plan_id.clone().into();
     let bytes = store
@@ -118,14 +114,11 @@ async fn plan_recursive(
 
     let params_struct = validate(param_types.as_ref(), params_value)?;
 
-    let plan_items = evaluate(setup, params_value.cloned(), params_struct, system, secrets)?;
+    let plan_items = evaluate(setup, params_value.cloned(), params_struct, system)?;
 
     let mut resources = Vec::with_capacity(plan_items.len());
     for plan_item in plan_items {
-        let node = Box::pin(plan_item_to_resource(
-            plan_item, &plan_id, store, system, secrets,
-        ))
-        .await?;
+        let node = Box::pin(plan_item_to_resource(plan_item, &plan_id, store, system)).await?;
         resources.push(node);
     }
 
@@ -161,7 +154,6 @@ async fn plan_item_to_resource(
     current_plan_id: &PlanId,
     store: &mut Store,
     system: &System,
-    secrets: &Secrets,
 ) -> Result<PlanTree<ResourceParams>, PlanItemToResourceError> {
     let (plan_item, _span) = plan_item.take();
     let crate::model::PlanItem {
@@ -206,7 +198,7 @@ async fn plan_item_to_resource(
     } else {
         let path = PathBuf::from(module.inner());
         let plan_id = current_plan_id.join(path);
-        let children = plan_recursive(plan_id, params_value.as_ref(), store, system, secrets)
+        let children = plan_recursive(plan_id, params_value.as_ref(), store, system)
             .await
             .map_err(Box::new)?;
         Ok(PlanTree::Branch {

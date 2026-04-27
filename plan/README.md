@@ -1,6 +1,6 @@
 # lusid-plan
 
-Planning: load a `.lusid` file, run its `setup(params, ctx)` function, and
+Planning: load a `.lusid` file, run its `setup(params, system)` function, and
 recursively produce a tree of typed resource params.
 
 ## Pipeline
@@ -12,12 +12,8 @@ recursively produce a tree of typed resource params.
    (name, version, params schema, setup function).
 3. **Validate** user params against the plan's schema (via
    [`lusid-params`](../params)).
-4. **Evaluate** the setup function with `(params, ctx)` to get a list of
-   [`PlanItem`](src/model.rs)s. `ctx` is a synthesised Rimu object bundling
-   runtime inputs — `{ system, secrets }`. See
-   [`lusid-secrets`](../secrets) for how `ctx.secrets.<name>` is populated
-   (eagerly decrypted `*.age` files keyed by filename stem; missing names
-   surface as `Null`).
+4. **Evaluate** the setup function with `(params, system)` to get a list of
+   [`PlanItem`](src/model.rs)s.
 5. **Convert** each item:
    - `module: "@core/<id>"` → leaf with typed [`ResourceParams`](../resource).
    - Otherwise → sibling `.lusid` path, recurse into a branch.

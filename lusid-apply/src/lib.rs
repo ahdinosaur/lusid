@@ -32,6 +32,7 @@
 //! for the machine-readable protocol.
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{CausalityTree, EpochError, compute_epochs};
@@ -41,7 +42,7 @@ use lusid_plan::{
     self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
 use lusid_resource::{Resource, ResourceState, ResourceStateError};
-use lusid_secrets::{DecryptError, Identity, IdentityError, Secrets, decrypt_dir};
+use lusid_secrets::{LoadError, Redactor, Secrets};
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
 use lusid_tree::FlatTree;
@@ -50,23 +51,33 @@ use rimu::SourceId;
 use rimu_interop::{ToRimuError, to_rimu};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 /// Inputs for [`apply`]. `root_path` is the lusid working-dir root passed to
 /// [`Context::create`]; `plan_id` selects a plan; `params_json` is an
 /// optional JSON object (validated against the plan's params schema).
 ///
-/// Secrets: when `identity_path` is provided, every `*.age` file under
-/// `secrets_dir` is eagerly decrypted and exposed to plans via
-/// `ctx.secrets.*`. When `identity_path` is `None`, plans see an empty
-/// `ctx.secrets` regardless of `secrets_dir` — i.e. no identity means no
-/// decryption is even attempted.
+/// Secrets: if `identity_path` is `Some`, `lusid-apply` loads that identity,
+/// reads `lusid-secrets.toml` from `secrets_dir` (defaulting to
+/// `<root>/secrets`), matches the identity to an alias, and decrypts the
+/// subset of `*.age` files declared for that alias. `None` skips secrets
+/// entirely (plans that reference `@core/secret` will fail at apply with a
+/// missing-secret error).
+///
+/// `guest_mode` changes the secrets path for remote / dev-apply guests:
+/// skip the `lusid-secrets.toml` lookup and just decrypt every `*.age`
+/// under `secrets_dir` with the single identity we were given. The host
+/// has already re-encrypted ciphertexts per-target, so whatever landed in
+/// `secrets_dir` is exactly the subset this guest is supposed to see.
+/// Requires `identity_path` to be set.
 pub struct ApplyOptions {
     pub root_path: PathBuf,
     pub plan_id: PlanId,
     pub params_json: Option<String>,
     pub identity_path: Option<PathBuf>,
     pub secrets_dir: Option<PathBuf>,
+    pub guest_mode: bool,
 }
 
 #[derive(Error, Debug)]
@@ -107,11 +118,8 @@ pub enum ApplyError {
     #[error(transparent)]
     OperationApply(#[from] OperationApplyError),
 
-    #[error("failed to load age identity: {0}")]
-    Identity(#[from] IdentityError),
-
-    #[error("failed to decrypt secrets: {0}")]
-    Decrypt(#[from] DecryptError),
+    #[error(transparent)]
+    Secrets(#[from] LoadError),
 }
 
 /// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it
@@ -127,32 +135,23 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         params_json,
         identity_path,
         secrets_dir,
+        guest_mode,
     } = options;
 
     let mut ctx = Context::create(&root_path)?;
     let mut store = Store::new(ctx.paths().cache_dir());
     let system = System::get().await?;
 
-    // Load + decrypt secrets, if an identity was provided. Without an
-    // identity we skip decryption entirely — plans see `ctx.secrets` as an
-    // empty object. We eagerly decrypt so the redaction table is complete
-    // regardless of which secrets any particular plan happens to touch.
-    let secrets = match identity_path.as_deref() {
-        None => {
-            info!("no identity provided; ctx.secrets will be empty");
-            Secrets::empty()
-        }
-        Some(identity_path) => {
-            let identity = Identity::from_file(identity_path).await?;
-            let dir = secrets_dir.unwrap_or_else(|| root_path.join("secrets"));
-            let secrets = decrypt_dir(&identity, &dir).await?;
-            info!(count = secrets.len(), "loaded secrets");
-            secrets
-        }
-    };
-    // Built once up-front; applied to every per-operation stdout/stderr
-    // line before emit. Best-effort — see `Redactor` docs for caveats.
-    let redactor = secrets.redactor();
+    // Resolve secrets_dir to <root>/secrets by default. Only consulted when
+    // an identity is supplied — without one, there's no key to decrypt with
+    // so the directory's existence is irrelevant.
+    let secrets_dir = secrets_dir.unwrap_or_else(|| root_path.join("secrets"));
+    // Built alongside `Secrets` so it can be cloned into per-operation
+    // stdout/stderr scrubbing below. Holds `Arc` clones of the plaintexts,
+    // so constructing it here and then moving `secrets` into `ctx` is safe.
+    let secrets = Secrets::load(&secrets_dir, identity_path.as_deref(), guest_mode).await?;
+    let redactor: Redactor = secrets.redactor();
+    ctx.set_secrets(secrets);
 
     info!(plan = %plan_id, "using plan");
 
@@ -170,7 +169,7 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     };
 
     // Parse/evaluate to tree of resource params.
-    let resource_params = plan(plan_id, param_values, &mut store, &system, &secrets).await?;
+    let resource_params = plan(plan_id, param_values, &mut store, &system).await?;
     debug!("Resource params: {resource_params:?}");
     emit(AppUpdate::ResourceParams {
         resource_params: render_plan_tree(resource_params.clone()),
@@ -361,21 +360,28 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     Ok(())
 }
 
+/// Serializes access to stdout across the apply. Operation stdout/stderr are
+/// drained concurrently via `tokio::try_join!`, so without a mutex two
+/// `emit()` calls can interleave — one task's JSON can land between another's
+/// JSON and its trailing newline, which the TUI reads as a single line with
+/// trailing characters. Pipe writes are only atomic up to `PIPE_BUF` (4 KiB);
+/// AppUpdates with large trees exceed that easily.
+static EMIT_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
 /// Serialize `update` to a single JSON line on stdout and flush.
 ///
 /// The flush is load-bearing: the TUI reads line-by-line with
 /// `AsyncBufRead::lines()`, so buffering would make progress updates
 /// invisible to the reader even though the work completed long before.
 async fn emit(update: AppUpdate) -> Result<(), ApplyError> {
+    let mut line = serde_json::to_vec(&update).map_err(ApplyError::JsonOutput)?;
+    line.push(b'\n');
+
+    let _guard = EMIT_LOCK.lock().await;
     let mut stdout = tokio::io::stdout();
 
     stdout
-        .write_all(&serde_json::to_vec(&update).map_err(ApplyError::JsonOutput)?)
-        .await
-        .map_err(ApplyError::WriteStdout)?;
-
-    stdout
-        .write_all(b"\n")
+        .write_all(&line)
         .await
         .map_err(ApplyError::WriteStdout)?;
 

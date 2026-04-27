@@ -1,17 +1,19 @@
 //! `@core/secret`: materialise an age-decrypted plaintext onto the target
-//! filesystem with stricter defaults than `@core/file` with `type: "contents"`.
+//! filesystem, referenced by name (agenix-style — the plan names the secret,
+//! the plaintext is resolved at apply time against the decrypted secrets
+//! bundle on [`Context`]).
 //!
-//! Differences from `@core/file` + `type: "contents"`:
+//! Differences from `@core/file`:
 //!
+//! - `name` names a `*.age` secret by its file stem (e.g. `api_key` →
+//!   `secrets/api_key.age`). Plaintext never flows through the plan.
 //! - `mode` defaults to `0o600` (owner read/write, nothing for group/world)
 //!   when omitted. `@core/file` leaves mode to the umask.
-//! - Single-purpose schema: just `contents` + `path` + optional owner bits.
-//!   No union over `source` / `file` / `directory` cases.
 //!
 //! Under the hood this delegates to `@core/file`'s state/change/operation
-//! machinery — the atoms produced are ordinary [`FileResource`] variants, so
-//! downstream scheduling and application are identical. Only the default
-//! permissions and the intent expressed by the plan author differ.
+//! machinery — the atoms produced are ordinary [`FileResource::Secret`]
+//! variants, so downstream scheduling and application are identical. Only
+//! the default permissions and the intent expressed by the plan author differ.
 //!
 //! Note(cc): not as strict as agenix's model (which decrypts onto a tmpfs
 //! mount, forces `0400`, root-owned). Those are bigger moves — tmpfs needs
@@ -29,7 +31,7 @@ use lusid_operation::{
     Operation,
     operations::file::{FileGroup, FileMode, FilePath, FileUser},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes, Secret as SecretPlaintext};
+use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
 use serde::Deserialize;
@@ -44,7 +46,7 @@ pub const DEFAULT_MODE: u32 = 0o600;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SecretParams {
-    pub contents: SecretPlaintext,
+    pub name: String,
     pub path: FilePath,
     pub mode: Option<FileMode>,
     pub user: Option<FileUser>,
@@ -53,7 +55,7 @@ pub struct SecretParams {
 
 impl Display for SecretParams {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Secret(path={})", self.path)
+        write!(f, "Secret(name={}, path={})", self.name, self.path)
     }
 }
 
@@ -78,7 +80,7 @@ impl ResourceType for Secret {
 
         Some(Spanned::new(
             ParamTypes::Struct(indexmap! {
-                "contents".to_string() => field(ParamType::Secret, true),
+                "name".to_string() => field(ParamType::String, true),
                 "path".to_string() => field(ParamType::TargetPath, true),
                 "mode".to_string() => field(ParamType::Number, false),
                 "user".to_string() => field(ParamType::String, false),
@@ -93,7 +95,7 @@ impl ResourceType for Secret {
 
     fn resources(params: Self::Params) -> Vec<CausalityTree<Self::Resource>> {
         let SecretParams {
-            contents,
+            name,
             path,
             mode,
             user,
@@ -104,8 +106,8 @@ impl ResourceType for Secret {
         let mut nodes = vec![
             CausalityTree::leaf(
                 CausalityMeta::id("file".into()),
-                FileResource::Contents {
-                    contents,
+                FileResource::Secret {
+                    name,
                     path: path.clone(),
                 },
             ),

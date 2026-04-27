@@ -1,0 +1,21 @@
+log = "info"
+
+# Two Debian 13 ("trixie") x86-64 servers. Both apply the same plan
+# (`web-server.lusid`) but receive a per-machine greeting via `params`,
+# so each server serves a distinct page.
+
+[machines.web-a]
+hostname = "web-a"
+arch = "x86-64"
+os = { type = "linux", linux = "debian", debian = 13 }
+vm = { graphics = false }
+plan = "./web-server.lusid"
+params = { greeting = "Hello from web-a!" }
+
+[machines.web-b]
+hostname = "web-b"
+arch = "x86-64"
+os = { type = "linux", linux = "debian", debian = 13 }
+vm = { graphics = false }
+plan = "./web-server.lusid"
+params = { greeting = "Hello from web-b!" }

@@ -1,0 +1,163 @@
+//! Host-side re-encryption of a secrets directory for a single target machine.
+
+use std::path::Path;
+
+use secrecy::ExposeSecret;
+use thiserror::Error;
+
+use crate::crypto::{EncryptError, encrypt_bytes};
+use crate::decrypt_all::{DecryptAllError, decrypt_all};
+use crate::identity::{Identity, IdentityError};
+use crate::key::{Key, KeyParseError};
+
+/// A re-encrypted secret produced by [`reencrypt_for_machine`]: the file
+/// stem (e.g. `api_token`) and the new age ciphertext encrypted to the
+/// target's key. Callers typically write each back as
+/// `<remote_secrets_dir>/<stem>.age` on the target.
+#[derive(Debug, Clone)]
+pub struct ReencryptedSecret {
+    pub stem: String,
+    pub ciphertext: Vec<u8>,
+}
+
+#[derive(Debug, Error)]
+pub enum ReencryptForMachineError {
+    #[error(transparent)]
+    Identity(#[from] IdentityError),
+
+    #[error(transparent)]
+    MachineKey(#[from] KeyParseError),
+
+    #[error(transparent)]
+    DecryptAll(#[from] DecryptAllError),
+
+    #[error(transparent)]
+    Encrypt(#[from] EncryptError),
+}
+
+/// Decrypt every `*.age` under `secrets_dir` using the identity at
+/// `host_identity_path`, then re-encrypt each plaintext to `machine_pubkey`
+/// alone and return the resulting ciphertexts.
+///
+/// `machine_pubkey` is the target's age recipient as a string — either
+/// `age1...` for an x25519 recipient or `ssh-ed25519 ...` / `ssh-rsa ...`
+/// for an SSH public key. Trailing SSH comments (`... user@host`) are
+/// tolerated.
+///
+/// Host side of per-target re-encryption: `dev apply` / `remote apply`
+/// uses this to produce a bundle of ciphertexts decryptable only by the
+/// target's key, ships them over SSH, and points the guest's `lusid-apply`
+/// at them via `--secrets-dir` + `--guest-mode`.
+///
+/// Assumes the host identity is a recipient on every `*.age` under
+/// `secrets_dir` (this uses [`decrypt_all`], not `files_for_alias` filtering).
+/// In a multi-operator world where the operator running `dev apply` only has
+/// access to a subset of files, `decrypt_all` will fail on the first file
+/// they can't decrypt. For v1's single-operator-per-project flow this is
+/// fine; revisit when operators-with-scoped-access becomes a real use case.
+///
+/// Plaintexts live only inside the intermediate [`crate::Secrets`] and are
+/// zeroised when it drops at function return. The operator identity never
+/// leaves the host.
+#[tracing::instrument(fields(identity = %host_identity_path.display(), dir = %secrets_dir.display()))]
+pub async fn reencrypt_for_machine(
+    host_identity_path: &Path,
+    secrets_dir: &Path,
+    machine_pubkey: &str,
+) -> Result<Vec<ReencryptedSecret>, ReencryptForMachineError> {
+    let host_identity = Identity::from_file(host_identity_path).await?;
+    let machine_key: Key = machine_pubkey.parse()?;
+
+    let secrets = decrypt_all(&host_identity, secrets_dir).await?;
+    let recipients: Vec<Box<dyn age::Recipient + Send>> = match machine_key {
+        Key::X25519(k) => vec![Box::new(k)],
+        Key::Ssh(k) => vec![Box::new(k)],
+    };
+
+    let mut out = Vec::with_capacity(secrets.len());
+    for (stem, secret) in secrets.iter() {
+        // `path` is only used for error labelling inside encrypt_bytes. A
+        // virtual `<stem>.age` keeps diagnostics meaningful without a
+        // filesystem round-trip.
+        let virtual_path = Path::new(stem);
+        let ciphertext =
+            encrypt_bytes(&recipients, virtual_path, secret.expose_secret().as_bytes())?;
+        out.push(ReencryptedSecret {
+            stem: stem.to_owned(),
+            ciphertext,
+        });
+    }
+
+    tracing::info!(count = out.len(), "re-encrypted secrets for machine");
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use secrecy::ExposeSecret;
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::crypto::{decrypt_bytes, encrypt_bytes};
+
+    #[tokio::test]
+    async fn round_trips() {
+        // Host identity encrypts; target identity is separate. The function
+        // re-encrypts each `*.age` so only the target can decrypt it.
+        let host_age = age::x25519::Identity::generate();
+        let target_age = age::x25519::Identity::generate();
+        let target_identity: Identity = target_age.to_string().expose_secret().parse().unwrap();
+        let target_pubkey = target_age.to_public().to_string();
+
+        let dir = TempDir::new().unwrap();
+        let host_identity_path = dir.path().join("host_identity");
+        std::fs::write(&host_identity_path, host_age.to_string().expose_secret()).unwrap();
+
+        let secrets_dir = dir.path().join("secrets");
+        std::fs::create_dir(&secrets_dir).unwrap();
+        for (stem, value) in &[("alpha", b"alphaplain" as &[u8]), ("beta", b"betaplain")] {
+            let ct =
+                encrypt_bytes(&[Box::new(host_age.to_public())], Path::new(stem), value).unwrap();
+            std::fs::write(secrets_dir.join(format!("{stem}.age")), &ct).unwrap();
+        }
+
+        let reencrypted = reencrypt_for_machine(&host_identity_path, &secrets_dir, &target_pubkey)
+            .await
+            .unwrap();
+        assert_eq!(reencrypted.len(), 2);
+
+        let mut by_stem: std::collections::HashMap<&str, &Vec<u8>> = reencrypted
+            .iter()
+            .map(|r| (r.stem.as_str(), &r.ciphertext))
+            .collect();
+        let alpha_ct = by_stem.remove("alpha").unwrap();
+        let beta_ct = by_stem.remove("beta").unwrap();
+
+        let alpha_pt = decrypt_bytes(&target_identity, Path::new("alpha"), alpha_ct).unwrap();
+        let beta_pt = decrypt_bytes(&target_identity, Path::new("beta"), beta_ct).unwrap();
+        assert_eq!(alpha_pt.expose_secret().as_str(), "alphaplain");
+        assert_eq!(beta_pt.expose_secret().as_str(), "betaplain");
+
+        // Host identity can no longer decrypt the re-encrypted payload —
+        // only the target recipient is on the ciphertext.
+        let host_identity: Identity = host_age.to_string().expose_secret().parse().unwrap();
+        assert!(decrypt_bytes(&host_identity, Path::new("alpha"), alpha_ct).is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_malformed_machine_pubkey() {
+        let host_age = age::x25519::Identity::generate();
+        let dir = TempDir::new().unwrap();
+        let host_identity_path = dir.path().join("host_identity");
+        std::fs::write(&host_identity_path, host_age.to_string().expose_secret()).unwrap();
+        let secrets_dir = dir.path().join("secrets");
+        std::fs::create_dir(&secrets_dir).unwrap();
+
+        let err = reencrypt_for_machine(&host_identity_path, &secrets_dir, "not-a-key")
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ReencryptForMachineError::MachineKey(_)));
+    }
+}

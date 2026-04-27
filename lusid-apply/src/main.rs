@@ -25,16 +25,23 @@ struct Cli {
     #[arg(long = "params")]
     params_json: Option<String>,
 
-    /// Path to an age secret key file (e.g. `AGE-SECRET-KEY-...`). When set,
-    /// every `*.age` file under `--secrets-dir` is decrypted up-front and
-    /// exposed to plans as `ctx.secrets.<stem>`.
+    /// Path to the age/SSH identity file used to decrypt project secrets.
+    /// Omit to run without secrets (plans referencing `@core/secret` will
+    /// fail at apply time).
     #[arg(long = "identity")]
     identity_path: Option<PathBuf>,
 
-    /// Directory of `*.age` files to decrypt. Defaults to `<root>/secrets`.
-    /// Ignored when `--identity` is not set.
+    /// Directory containing `lusid-secrets.toml` and `*.age` ciphertexts.
+    /// Defaults to `<root>/secrets`.
     #[arg(long = "secrets-dir")]
     secrets_dir: Option<PathBuf>,
+
+    /// Decrypt every `*.age` under `--secrets-dir` with `--identity`,
+    /// ignoring `lusid-secrets.toml`. Used on remote / dev-apply targets
+    /// where the host has already filtered the ciphertext set to exactly
+    /// what this guest should decrypt. Requires `--identity`.
+    #[arg(long = "guest-mode")]
+    guest_mode: bool,
 
     /// Log level (e.g., trace, debug, info, warn, error). Default: info.
     #[arg(long = "log", default_value = "info")]
@@ -58,6 +65,7 @@ async fn main() {
         params_json: cli.params_json,
         identity_path: cli.identity_path,
         secrets_dir: cli.secrets_dir,
+        guest_mode: cli.guest_mode,
     };
 
     if let Err(err) = apply(options).await {

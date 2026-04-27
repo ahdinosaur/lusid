@@ -3,8 +3,8 @@
 Runtime detection of the host machine.
 
 `System` bundles hostname, CPU arch, OS (with distro + version for Linux), and
-current user — the same struct plans see as `ctx.system` inside their
-`setup(params, ctx)` function (serialized through `rimu-interop`).
+current user — the same struct plans receive as the `system` argument to their
+`setup(params, system)` function (serialized through `rimu-interop`).
 
 Detection covers:
 

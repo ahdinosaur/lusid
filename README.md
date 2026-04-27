@@ -16,17 +16,85 @@ Lusid can be used for your workstations (desktops or laptops) or your servers (h
 
 ## Get Started
 
+Check out the [examples](./examples/):
+
+- [`examples/nginx-cluster`](./examples/nginx-cluster/) — two Debian servers each running nginx with a per-machine greeting.
+- [`examples/arch-desktop`](./examples/arch-desktop/) — one Arch machine running a minimal XFCE desktop.
+
 ### Install
 
-TODO
+Until lusid has binary releases, build it from source:
+
+```sh
+git clone https://github.com/ahdinosaur/lusid
+cd lusid
+cargo build --release
+```
+
+This produces two binaries under `./target/release/`:
+
+- `lusid` — the CLI you run: `lusid machines list`, `lusid local apply`, `lusid dev apply`, ….
+- `lusid-apply` — the worker that actually evaluates + applies a plan. `lusid` spawns this either locally or inside a dev VM over SSH.
+
+The `just` recipes in the repo root handle the cross-compile dance. If you have [just](https://github.com/casey/just) installed:
+
+```sh
+just build-lusid-apply
+```
+
+For running the `dev apply` / `dev ssh` flow you also need QEMU and a couple of image-building tools — see the [examples prerequisites](./examples/README.md#prerequisites) for the exact packages.
 
 ### Create a plan
 
-TODO
+A lusid project is just a directory with two files:
+
+- `lusid.toml` — lists the machines you want to manage and pairs each with a plan file.
+- `*.lusid` — one or more plan files written in [Rimu](https://rimu.dev), each exporting a `setup(params, system)` function that returns a list of resources.
+
+The smallest useful project is a single machine applying a single plan:
+
+```toml
+# lusid.toml
+[machines.my-server]
+hostname = "my-server"
+arch = "x86-64"
+os = { type = "linux", linux = "debian", debian = 13 }
+plan = "./server.lusid"
+```
+
+```yaml
+# server.lusid
+name: "server"
+version: "0.1.0"
+
+setup: (params, system) =>
+  - module: "@core/apt"
+    params:
+      packages: ["curl", "git", "htop"]
+```
+
+See the [examples](./examples/) for configs that use `params`, dependency ordering, and the `system` object (hostname, OS, current user).
 
 ### Apply a plan
 
-TODO
+There are three ways to run a plan, depending on where the target machine is:
+
+**Local** — apply to the host you're sitting at. lusid picks the machine config whose `hostname` matches `$(hostname)`.
+
+```sh
+lusid --config ./lusid.toml local apply
+```
+
+**Dev VM** — boot a local QEMU VM matching the machine's spec (OS, arch) and apply inside it. Great for iterating on a plan without touching your real machine:
+
+```sh
+lusid --config ./lusid.toml dev apply --machine my-server
+lusid --config ./lusid.toml dev ssh   --machine my-server   # shell inside the VM
+```
+
+**Remote** — apply to a machine you reach over SSH. Not implemented yet; tracked on the roadmap.
+
+Applying the same plan twice is always safe: lusid reads the current state of every resource and only runs the operations needed to close the gap. A no-op apply after a successful apply prints "no changes" and exits.
 
 ## Concepts
 
@@ -36,7 +104,7 @@ A plan describes a modular set of resources you want to be applied to the machin
 
 Plans are written in the [the Rimu language](https://rimu.dev):
 
-```
+```yaml
 name: "example-git-setup"
 version: "0.1.0"
 
@@ -44,12 +112,12 @@ params:
   whatever:
     type: "boolean"
 
-setup: (params, ctx) =>
+setup: (params, system) =>
   - module: "@core/file"
     params:
-      type: "source"
+      state: "sourced"
       source: "./gitconfig"
-      path: ctx.system.user.home + ".gitconfig"
+      path: system.user.home + "/.gitconfig"
 
   - module: "@core/apt"
     id: "install-curl"
@@ -92,15 +160,17 @@ A resource represents the intended state of a thing on your computer, e.g. a pac
 Resource types:
 
 - [x] [Apt](./resource/src/resources/apt.rs)
-    - [ ] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
-- [ ] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
+- [x] [AptRepo](./resource/src/resources/apt_repo.rs)
+- [x] [Command](./resource/src/resources/command.rs)
+- [x] [Directory](./resource/src/resources/directory.rs)
 - [x] [File](./resource/src/resources/file.rs)
-- [ ] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
-- [ ] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
-- [ ] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
+- [x] [Git](./resource/src/resources/git.rs)
+- [x] [Group](./resource/src/resources/group.rs)
 - [x] [Pacman](./resource/src/resources/pacman.rs)
-- [ ] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
-- [ ] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
+- [x] [Podman](./resource/src/resources/podman.rs)
+- [x] [Systemd](./resource/src/resources/systemd.rs)
+- [x] [User](./resource/src/resources/user.rs)
+- [ ] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
 
 Each resource type defines:
 
@@ -117,46 +187,22 @@ An operation is an action you can apply to your computer, e.g. installing a pack
 Operation types:
 
 - [x] [Apt](./operation/src/operations/apt.rs)
-    - [ ] Repository ([TODO](https://github.com/ahdinosaur/lusid/issues/24))
-- [ ] Command ([TODO](https://github.com/ahdinosaur/lusid/issues/30))
+- [x] [AptRepo](./operation/src/operations/apt_repo.rs)
+- [x] [Command](./operation/src/operations/command.rs)
+- [x] [Directory](./operation/src/operations/directory.rs)
 - [x] [File](./operation/src/operations/file.rs)
-- [ ] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
-- [ ] Git ([TODO](https://github.com/ahdinosaur/lusid/issues/33))
-- [ ] Group ([TODO](https://github.com/ahdinosaur/lusid/issues/29))
+- [x] [Git](./operation/src/operations/git.rs)
+- [x] [Group](./operation/src/operations/group.rs)
 - [x] [Pacman](./operation/src/operations/pacman.rs)
-- [ ] Systemd Service ([TODO](https://github.com/ahdinosaur/lusid/issues/27))
-- [ ] User ([TODO](https://github.com/ahdinosaur/lusid/issues/28))
+- [x] [Podman](./operation/src/operations/podman.rs)
+- [x] [Systemd](./operation/src/operations/systemd.rs)
+- [x] [User](./operation/src/operations/user.rs)
+- [ ] FlatPak ([TODO](https://github.com/ahdinosaur/lusid/issues/32))
 
 Each operation type defines:
 
 - How to merge multiple operations of the same type
 - How to apply an operation
-
-### Secrets
-
-Project secrets are [age](https://age-encryption.org)-encrypted `*.age`
-files stored alongside the plan — by default under `<root>/secrets/`. At
-the start of every apply they are decrypted with a single project-scoped
-identity and exposed to plans as `ctx.secrets.<stem>` (e.g. the file
-`secrets/api_key.age` becomes `ctx.secrets.api_key`).
-
-```
-setup: (params, ctx) =>
-  - module: "@core/secret"
-    params:
-      contents: ctx.secrets.api_key
-      path: ctx.system.user.home + "/.config/myapp/api-key"
-```
-
-`@core/secret` defaults `mode` to `0o600` (owner-only). If you'd rather
-manage the file yourself, `@core/file` with `type: "contents"` also
-accepts a secret `contents`, but leaves `mode`/`user`/`group` up to you.
-
-Pass the identity via `--identity <path>` (or `identity = "…"` in
-`lusid.toml`). When no identity is provided, `ctx.secrets` is an empty
-object — plans referencing a missing secret see `Null`. See
-[`lusid-secrets`](./secrets) for the trust model and the open work on
-remote/dev apply.
 
 ## Glossary
 
@@ -170,16 +216,12 @@ remote/dev apply.
 - **Change**: computed delta from state to desired.
 - **Operation**: executable action(s) derived from change.
 - **Epoch**: dependency layer computed from causality constraints.
-- **ctx**: the Rimu object passed as the second argument to `setup(params, ctx)`;
-  bundles runtime inputs (`ctx.system.*`, `ctx.secrets.*`).
-- **Secret**: an age-decrypted plaintext loaded from `<root>/secrets/<name>.age`
-  and exposed as `ctx.secrets.<name>`.
 
 ## Roadmap
 
 - [ ] Implement my complete personal "SnugOS" config
 - [ ] Add system (i.e. Salt Stack "grains"): https://github.com/ahdinosaur/lusid/issues/9
-- [x] Add secrets management: https://github.com/ahdinosaur/lusid/issues/7
+- [ ] Add secrets management: https://github.com/ahdinosaur/lusid/issues/7
 - [ ] Add Nix-like immutable package builder: https://github.com/ahdinosaur/lusid/issues/1
 - [ ] Add unit testing framework for plans: https://github.com/ahdinosaur/lusid/issues/11
 - [ ] Add install hooks: https://github.com/ahdinosaur/lusid/issues/31

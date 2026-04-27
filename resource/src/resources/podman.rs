@@ -729,8 +729,10 @@ mod tests {
     #[test]
     fn change_recreate_when_image_differs() {
         let spec = ResourceSpec::default();
-        let mut other = ResourceSpec::default();
-        other.image = "docker.io/library/nginx:1.25".into();
+        let other = ResourceSpec {
+            image: "docker.io/library/nginx:1.25".into(),
+            ..ResourceSpec::default()
+        };
         let current = state_matching(&other);
         let change = Podman::change(&resource(spec), &current).expect("change");
         assert!(matches!(change, PodmanChange::Recreate { .. }));

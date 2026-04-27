@@ -179,8 +179,8 @@ mod tests {
     #[test]
     fn ubuntu_valid() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Ubuntu",
+            "type": "linux",
+            "linux": "ubuntu",
             "ubuntu": "22.04"
         }"#;
         let os: Os = from_str(j).unwrap();
@@ -190,8 +190,8 @@ mod tests {
     #[test]
     fn ubuntu_invalid_month() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Ubuntu",
+            "type": "linux",
+            "linux": "ubuntu",
             "ubuntu": "22.15"
         }"#;
         let err = serde_json::from_str::<Os>(j).unwrap_err();
@@ -201,8 +201,8 @@ mod tests {
     #[test]
     fn debian_u8() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Debian",
+            "type": "linux",
+            "linux": "debian",
             "debian": 12
         }"#;
         let os: Os = from_str(j).unwrap();
@@ -212,8 +212,8 @@ mod tests {
     #[test]
     fn arch_unit_variant() {
         let j = r#"{
-            "type": "Linux",
-            "linux": "Arch"
+            "type": "linux",
+            "linux": "arch"
         }"#;
         let os: Os = from_str(j).unwrap();
         assert_eq!(os.to_string(), "linux-arch");
