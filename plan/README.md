@@ -36,7 +36,7 @@ Three kinds of [`PlanNodeId`]:
 
 ## Core modules
 
-Built-in resources live under `@core/<id>`: `apt`, `file`, `pacman`, `command`,
-`git`. See [`src/core.rs`](src/core.rs) for the dispatch table — adding a new
+Built-in resources live under `@core/<id>`. See
+[`src/core.rs`](src/core.rs) for the full dispatch table — adding a new
 resource means adding an arm here plus the pieces in
 [`lusid-resource`](../resource).

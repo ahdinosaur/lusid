@@ -8,7 +8,7 @@
 
 1. Loads + evaluates the plan’s `setup(params, system)` function → returns a list of **PlanItem**s.
 2. Converts PlanItems into either:
-   - **Core modules** (`@core/*`) → become typed `ResourceParams` (apt/file/pacman today)
+   - **Core modules** (`@core/*`) → become typed `ResourceParams` (see [`plan/src/core.rs`](./plan/src/core.rs) for the dispatch table)
    - Or nested plans (module path) → recursively planned
 3. Validates parameter schemas and values (with good span/source error reporting).
 4. Builds a **causality tree** (nodes can have `id`, `requires`, `required_by` dependencies).

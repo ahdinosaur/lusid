@@ -79,9 +79,9 @@ Plans refer to secrets by name via `@core/secret`:
   params:
     name: "api_token"          # -> secrets/api_token.age
     path: "/etc/myapp/token"
-    mode: 384                   # optional; default 0o600
     user: "myapp"               # optional
     group: "myapp"              # optional
+    # mode defaults to 0o600; override with a decimal int if needed.
 ```
 
 `@core/secret` delegates to `@core/file`'s state/change/operation machinery,

@@ -221,7 +221,7 @@ Each operation type defines:
 
 - [ ] Implement my complete personal "SnugOS" config
 - [ ] Add system (i.e. Salt Stack "grains"): https://github.com/ahdinosaur/lusid/issues/9
-- [ ] Add secrets management: https://github.com/ahdinosaur/lusid/issues/7
+- [x] Add secrets management: https://github.com/ahdinosaur/lusid/issues/7
 - [ ] Add Nix-like immutable package builder: https://github.com/ahdinosaur/lusid/issues/1
 - [ ] Add unit testing framework for plans: https://github.com/ahdinosaur/lusid/issues/11
 - [ ] Add install hooks: https://github.com/ahdinosaur/lusid/issues/31
