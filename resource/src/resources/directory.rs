@@ -15,13 +15,13 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone, FromRimu)]
+#[rimu(tag = "state", rename_all = "kebab-case")]
 pub enum DirectoryParams {
     Present {
         path: FilePath,

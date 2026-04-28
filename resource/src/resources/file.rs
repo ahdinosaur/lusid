@@ -12,8 +12,8 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes, Secret};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
+use rimu_interop::FromRimu;
 use secrecy::ExposeSecret;
-use serde::Deserialize;
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -27,8 +27,8 @@ use crate::ResourceType;
 // itself: `@core/file` with `type: "contents"` has legitimate non-secret
 // uses (rendering a rendered config, writing a readme, etc.) where 0644 is
 // the right default. See `resource/src/resources/secret.rs`.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone, FromRimu)]
+#[rimu(tag = "state", rename_all = "kebab-case")]
 pub enum FileParams {
     Sourced {
         source: FilePath,

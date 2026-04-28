@@ -9,6 +9,7 @@ use lusid_resource::{
     secret::Secret, systemd::Systemd, user::User,
 };
 use rimu::{Spanned, Value};
+use rimu_interop::FromRimu;
 
 use crate::PlanItemToResourceError;
 
@@ -57,6 +58,12 @@ fn core_module_for_resource<R: ResourceType>(
     let param_values = ParamValues::from_rimu_spanned(params_value, params_struct)
         .map_err(PlanItemToResourceError::ParamsValueFromRimu)?;
 
-    let params: R::Params = param_values.into_inner().into_type()?;
-    Ok(params)
+    // ParamValues -> typed Rimu Value (paths typed) -> resource Params via FromRimu.
+    // The intermediate ParamValues round-trip is what does the host-path
+    // resolution for plain-string back-compat; once that lands on plain
+    // Value::HostPath at the boundary, we could collapse this.
+    let params_value = ParamValues::into_rimu_spanned(param_values);
+    R::Params::from_rimu_spanned(params_value)
+        .map(Spanned::into_inner)
+        .map_err(PlanItemToResourceError::ParamsFromRimu)
 }

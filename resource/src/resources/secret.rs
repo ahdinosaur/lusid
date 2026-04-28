@@ -32,7 +32,7 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes, Secret as SecretPlaintext};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 
 use crate::ResourceType;
 use crate::resources::file::{File, FileChange, FileResource, FileState, FileStateError};
@@ -42,7 +42,7 @@ use crate::resources::file::{File, FileChange, FileResource, FileState, FileStat
 /// deliberately group-readable for a multi-user service).
 pub const DEFAULT_MODE: u32 = 0o600;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, FromRimu)]
 pub struct SecretParams {
     pub contents: SecretPlaintext,
     pub path: FilePath,

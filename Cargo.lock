@@ -2628,6 +2628,7 @@ dependencies = [
  "lusid-params",
  "lusid-view",
  "rimu",
+ "rimu-interop",
  "secrecy",
  "serde",
  "serde_json",

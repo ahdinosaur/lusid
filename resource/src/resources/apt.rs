@@ -9,13 +9,13 @@ use lusid_operation::{Operation, operations::apt::AptOperation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, FromRimu)]
+#[rimu(untagged)]
 pub enum AptParams {
     Package { package: String },
     Packages { packages: Vec<String> },

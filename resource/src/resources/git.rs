@@ -13,12 +13,12 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, FromRimu)]
 pub struct GitParams {
     pub repo: String,
     pub path: FilePath,

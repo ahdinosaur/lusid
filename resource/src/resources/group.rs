@@ -9,7 +9,7 @@ use lusid_operation::{Operation, operations::group::GroupOperation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -19,8 +19,8 @@ use crate::ResourceType;
 /// Tagged by `state: "present" | "absent"`. Mirrors the shape used by Salt
 /// (`group.present`) and Ansible (`ansible.builtin.group`), with an additional
 /// `append_users` field to declaratively guarantee supplementary group membership.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone, FromRimu)]
+#[rimu(tag = "state", rename_all = "kebab-case")]
 pub enum GroupParams {
     Present {
         name: String,

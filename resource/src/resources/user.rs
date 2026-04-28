@@ -12,7 +12,7 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -24,8 +24,8 @@ use crate::ResourceType;
 // TODO(cc): add password (hashed), lock/unlock (`usermod -L`/`-U`), and account
 // expiry (`chage` / `usermod --expiredate`) support. Salt and Ansible both expose
 // these.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone, FromRimu)]
+#[rimu(tag = "state", rename_all = "kebab-case")]
 pub enum UserParams {
     Present {
         name: String,

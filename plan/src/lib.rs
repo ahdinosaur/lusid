@@ -144,7 +144,7 @@ pub enum PlanItemToResourceError {
     ParamsValueFromRimu(Spanned<ParamValuesFromRimuError>),
 
     /// Failed to convert parameter values to resource params: {0}
-    SerdeValue(#[from] rimu::SerdeValueError),
+    ParamsFromRimu(Spanned<rimu_interop::FromRimuError>),
 
     /// Unsupported core module id \"{id}\"
     UnsupportedCoreModuleId { id: String },

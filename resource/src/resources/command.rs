@@ -12,21 +12,21 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "status")]
+#[derive(Debug, Clone, FromRimu)]
+#[rimu(tag = "status")]
 pub enum CommandParams {
-    #[serde(rename = "install")]
+    #[rimu(rename = "install")]
     Install {
         is_installed: Option<String>,
         install: String,
         uninstall: Option<String>,
     },
-    #[serde(rename = "uninstall")]
+    #[rimu(rename = "uninstall")]
     Uninstall {
         is_installed: Option<String>,
         install: Option<String>,

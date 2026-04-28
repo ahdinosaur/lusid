@@ -33,7 +33,7 @@ use lusid_operation::Operation;
 use lusid_params::ParamTypes;
 use lusid_view::Render;
 use rimu::Spanned;
-use serde::de::DeserializeOwned;
+use rimu_interop::{FromRimu, FromRimuError};
 use thiserror::Error;
 
 mod resources;
@@ -73,8 +73,9 @@ pub trait ResourceType {
     /// Rimu schema used to validate this resource's params. `None` means "no fields".
     fn param_types() -> Option<Spanned<ParamTypes>>;
 
-    /// User-facing params struct (deserialised from the plan's Rimu value).
-    type Params: Render + DeserializeOwned;
+    /// User-facing params struct, parsed from the plan's Rimu value via
+    /// [`FromRimu`] (typically via the `#[derive(FromRimu)]` macro).
+    type Params: Render + FromRimu<Error = FromRimuError> + Clone;
 
     /// Indivisible unit of managed state. One `Params` may produce many atoms (e.g. one
     /// per package in a packages list).

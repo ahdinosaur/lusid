@@ -9,12 +9,12 @@ use lusid_operation::{Operation, operations::systemd::SystemdOperation};
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, FromRimu)]
 pub struct SystemdParams {
     pub name: String,
     pub enabled: Option<bool>,

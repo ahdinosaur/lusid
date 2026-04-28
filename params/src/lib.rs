@@ -36,12 +36,9 @@ use std::sync::Arc;
 
 use displaydoc::Display;
 use indexmap::IndexMap;
-use rimu::{
-    Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject, from_serde_value,
-};
-use rimu_interop::{FromRimu, FromRimuError, ToRimuError};
+use rimu::{Number, Span, Spanned, Value, ValueObject};
+use rimu_interop::{FromRimu, FromRimuError};
 use secrecy::{ExposeSecret, SecretBox};
-use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
 
 /// A secret plaintext string. Wraps an [`Arc`] (so `Clone` stays cheap) around
@@ -49,11 +46,6 @@ use thiserror::Error;
 /// zeroised when the last clone drops). The newtype exists so a [`FromRimu`]
 /// impl can be defined here — the orphan rule wouldn't allow it on the bare
 /// `Arc<SecretBox<String>>` from another crate.
-///
-/// `SecretBox<String>` (rather than `secrecy::SecretString`, a.k.a.
-/// `SecretBox<str>`) is used because only the sized form implements
-/// `serde::Deserialize`, which the legacy serde-derive resource path needs;
-/// after the [`FromRimu`] migration the requirement is informational.
 ///
 /// Note(cc): the [`Secret`] wrapper protects the plaintext at the boundaries,
 /// but the plan evaluator has to hand secrets to Rimu as plain [`Value::String`]
@@ -64,8 +56,7 @@ use thiserror::Error;
 /// / sops-nix sidestep this by materialising secrets at activation time and
 /// passing filenames through the evaluator instead of values. Until/unless Rimu
 /// grows a `Value::Secret`, this round-trip is an accepted limitation.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone)]
 pub struct Secret(Arc<SecretBox<String>>);
 
 impl Secret {
@@ -354,18 +345,6 @@ impl ParamValue {
 pub struct ParamValues(IndexMap<String, Spanned<ParamValue>>);
 
 #[derive(Debug, Clone, Error, Display)]
-pub enum ParamValuesFromTypeError {
-    /// Failed to convert serializable value to Rimu: {0}
-    ToRimu(#[from] ToRimuError),
-
-    /// Failed to convert Rimu value into parameter values: {0}
-    FromRimu(#[from] ParamValuesFromRimuError),
-
-    /// Failed validation: {0}
-    Validation(#[from] ParamsValidationError),
-}
-
-#[derive(Debug, Clone, Error, Display)]
 pub enum ParamValuesFromRimuError {
     /// Expected an object mapping parameter names to values
     NotAnObject,
@@ -440,15 +419,6 @@ impl ParamValues {
 
     pub fn get(&self, key: &str) -> Option<&Spanned<ParamValue>> {
         self.0.get(key)
-    }
-
-    pub fn into_type<T>(self) -> Result<T, SerdeValueError>
-    where
-        T: DeserializeOwned,
-    {
-        let value = self.into_rimu();
-        let serde_value = SerdeValue::from(value);
-        from_serde_value(serde_value)
     }
 }
 

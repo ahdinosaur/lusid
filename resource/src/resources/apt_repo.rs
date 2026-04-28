@@ -13,7 +13,7 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -30,7 +30,7 @@ const SOURCES_LIST_DIR: &str = "/etc/apt/sources.list.d";
 // (`^[a-z0-9][a-z0-9._-]*$`). `name` is interpolated into `/etc/apt/keyrings/`
 // and `/etc/apt/sources.list.d/`, so a path-traversing value would let a plan
 // author write outside those directories.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, FromRimu)]
 pub struct AptRepoParams {
     /// Filesystem-safe stem reused as the basename of the sources file
     /// (`<name>.sources`) and keyring (`<name>.asc`).

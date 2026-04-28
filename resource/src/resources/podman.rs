@@ -14,6 +14,7 @@ use lusid_operation::{
 use lusid_params::{ParamField, ParamType, ParamTypes};
 use lusid_view::impl_display_render;
 use rimu::{SourceId, Span, Spanned};
+use rimu_interop::FromRimu;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -30,8 +31,8 @@ use crate::ResourceType;
 /// An upstream change to a floating tag (e.g. `nginx:latest` republished)
 /// will not trigger a recreate — pin with `@sha256:...` for digest-level
 /// control.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone, FromRimu)]
+#[rimu(tag = "state", rename_all = "kebab-case")]
 pub enum PodmanParams {
     Present {
         name: String,
