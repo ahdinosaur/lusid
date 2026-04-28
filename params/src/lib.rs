@@ -39,18 +39,21 @@ use indexmap::IndexMap;
 use rimu::{
     Number, SerdeValue, SerdeValueError, Span, Spanned, Value, ValueObject, from_serde_value,
 };
-use rimu_interop::{FromRimu, ToRimuError};
+use rimu_interop::{FromRimu, FromRimuError, ToRimuError};
 use secrecy::{ExposeSecret, SecretBox};
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, de::DeserializeOwned};
 use thiserror::Error;
 
-/// A secret plaintext string. Wrapped in [`Arc`] so `ParamValue::Clone` stays
-/// cheap, and in [`SecretBox<String>`] so `Debug` is redacted and the plaintext
-/// is zeroised when the last clone drops.
+/// A secret plaintext string. Wraps an [`Arc`] (so `Clone` stays cheap) around
+/// a [`SecretBox<String>`] (so `Debug` is redacted and the plaintext is
+/// zeroised when the last clone drops). The newtype exists so a [`FromRimu`]
+/// impl can be defined here — the orphan rule wouldn't allow it on the bare
+/// `Arc<SecretBox<String>>` from another crate.
 ///
-/// `SecretBox<String>` (rather than `secrecy::SecretString`, a.k.a. `SecretBox<str>`)
-/// is used because only the sized form implements `serde::Deserialize`, which is
-/// needed so resource param structs can deserialise a secret field.
+/// `SecretBox<String>` (rather than `secrecy::SecretString`, a.k.a.
+/// `SecretBox<str>`) is used because only the sized form implements
+/// `serde::Deserialize`, which the legacy serde-derive resource path needs;
+/// after the [`FromRimu`] migration the requirement is informational.
 ///
 /// Note(cc): the [`Secret`] wrapper protects the plaintext at the boundaries,
 /// but the plan evaluator has to hand secrets to Rimu as plain [`Value::String`]
@@ -61,7 +64,35 @@ use thiserror::Error;
 /// / sops-nix sidestep this by materialising secrets at activation time and
 /// passing filenames through the evaluator instead of values. Until/unless Rimu
 /// grows a `Value::Secret`, this round-trip is an accepted limitation.
-pub type Secret = Arc<SecretBox<String>>;
+#[derive(Debug, Clone, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(Arc<SecretBox<String>>);
+
+impl Secret {
+    pub fn new(plaintext: String) -> Self {
+        Self(Arc::new(SecretBox::new(Box::new(plaintext))))
+    }
+}
+
+impl ExposeSecret<String> for Secret {
+    fn expose_secret(&self) -> &String {
+        self.0.expose_secret()
+    }
+}
+
+impl FromRimu for Secret {
+    type Error = FromRimuError;
+
+    fn from_rimu(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::String(s) => Ok(Secret::new(s)),
+            other => Err(FromRimuError::WrongType {
+                expected: "a string",
+                got: Box::new(other),
+            }),
+        }
+    }
+}
 
 /// Schema node: the allowed shape of a single value.
 ///
@@ -302,9 +333,9 @@ impl ParamValue {
             }
             (ParamType::TargetPath, Value::TargetPath(path)) => Ok(ParamValue::TargetPath(path)),
             (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
-            (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Arc::new(
-                SecretBox::new(Box::new(value)),
-            ))),
+            (ParamType::Secret, Value::String(value)) => {
+                Ok(ParamValue::Secret(Secret::new(value)))
+            }
             (typ, value) => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
                 typ: Box::new(typ),
                 value: Box::new(value),

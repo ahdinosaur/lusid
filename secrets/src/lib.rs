@@ -65,11 +65,10 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
 
 use displaydoc::Display;
 use lusid_params::Secret;
-use secrecy::{ExposeSecret, SecretBox};
+use secrecy::ExposeSecret;
 use thiserror::Error;
 use tokio::fs;
 
@@ -337,7 +336,7 @@ fn decrypt_bytes(
     let plaintext = String::from_utf8(plaintext).map_err(|_| DecryptError::NotUtf8 {
         path: path.to_path_buf(),
     })?;
-    Ok(Arc::new(SecretBox::new(Box::new(plaintext))))
+    Ok(Secret::new(plaintext))
 }
 
 #[derive(Debug, Error, Display)]
@@ -379,7 +378,7 @@ mod tests {
     use super::*;
 
     fn secret_of(s: &str) -> Secret {
-        Arc::new(SecretBox::new(Box::new(s.to_string())))
+        Secret::new(s.to_string())
     }
 
     fn secrets_from(pairs: &[(&str, &str)]) -> Secrets {

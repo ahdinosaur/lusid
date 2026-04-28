@@ -2,6 +2,8 @@ use async_trait::async_trait;
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_view::impl_display_render;
+use rimu::Value;
+use rimu_interop::{FromRimu, FromRimuError};
 use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
@@ -38,6 +40,27 @@ impl Display for FilePath {
     }
 }
 
+/// `FilePath` is used both for host-side and target-side paths in resource
+/// params (the schema picks `host-path` vs `target-path` per field). Accept
+/// either typed form, and a plain string for back-compat with host-side
+/// values (e.g. `ctx.system.user.home + "/foo"` that haven't migrated to
+/// `target_path("...")`).
+impl FromRimu for FilePath {
+    type Error = FromRimuError;
+
+    fn from_rimu(value: Value) -> Result<Self, Self::Error> {
+        match value {
+            Value::HostPath(path) => Ok(FilePath::new(path.display().to_string())),
+            Value::TargetPath(path) => Ok(FilePath::new(path)),
+            Value::String(path) => Ok(FilePath::new(path)),
+            other => Err(FromRimuError::WrongType {
+                expected: "a host-path, target-path, or string",
+                got: Box::new(other),
+            }),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Copy, PartialEq, Eq)]
 pub struct FileMode(u32);
 
@@ -54,6 +77,14 @@ impl FileMode {
 impl Display for FileMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:o}", self.0)
+    }
+}
+
+impl FromRimu for FileMode {
+    type Error = FromRimuError;
+
+    fn from_rimu(value: Value) -> Result<Self, Self::Error> {
+        u32::from_rimu(value).map(FileMode::new)
     }
 }
 
@@ -76,6 +107,14 @@ impl Display for FileUser {
     }
 }
 
+impl FromRimu for FileUser {
+    type Error = FromRimuError;
+
+    fn from_rimu(value: Value) -> Result<Self, Self::Error> {
+        String::from_rimu(value).map(FileUser::new)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FileGroup(String);
 
@@ -92,6 +131,14 @@ impl FileGroup {
 impl Display for FileGroup {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl FromRimu for FileGroup {
+    type Error = FromRimuError;
+
+    fn from_rimu(value: Value) -> Result<Self, Self::Error> {
+        String::from_rimu(value).map(FileGroup::new)
     }
 }
 

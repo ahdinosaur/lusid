@@ -2567,6 +2567,8 @@ dependencies = [
  "lusid-http",
  "lusid-view",
  "pin-project",
+ "rimu",
+ "rimu-interop",
  "serde",
  "thiserror 2.0.18",
  "tokio",
