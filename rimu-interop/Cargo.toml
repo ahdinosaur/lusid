@@ -5,6 +5,8 @@ edition = "2024"
 
 [dependencies]
 displaydoc.workspace = true
+indexmap.workspace = true
 rimu.workspace = true
+rust_decimal = "1.39"
 serde.workspace = true
 thiserror.workspace = true
