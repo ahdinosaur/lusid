@@ -38,6 +38,7 @@ use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{CausalityTree, EpochError, compute_epochs};
 use lusid_ctx::{Context, ContextError};
 use lusid_operation::{Operation, OperationApplyError};
+use lusid_params::ParamsContext;
 use lusid_plan::{
     self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
@@ -168,8 +169,15 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         }
     };
 
+    // Fallback origin for resolving relative `host-path` strings that arrive
+    // without a real source span — i.e. CLI-supplied `--params`. Anchoring on
+    // the project root means a `--params '{"src": "./foo"}'` invocation
+    // resolves "./foo" relative to the directory the user thinks of as their
+    // project root, not the CWD lusid-apply happens to run from.
+    let params_ctx = ParamsContext::new(root_path.clone());
+
     // Parse/evaluate to tree of resource params.
-    let resource_params = plan(plan_id, param_values, &mut store, &system).await?;
+    let resource_params = plan(plan_id, param_values, &params_ctx, &mut store, &system).await?;
     debug!("Resource params: {resource_params:?}");
     emit(AppUpdate::ResourceParams {
         resource_params: render_plan_tree(resource_params.clone()),

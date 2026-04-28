@@ -4,7 +4,6 @@ use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_view::impl_display_render;
 use secrecy::ExposeSecret;
-use serde::{Deserialize, Serialize};
 use std::{
     fmt::{Debug, Display},
     path::Path,
@@ -42,7 +41,7 @@ pub enum FileSource {
     Secret(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FilePath(String);
 
 impl FilePath {
@@ -61,7 +60,7 @@ impl Display for FilePath {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileMode(u32);
 
 impl FileMode {
@@ -80,7 +79,7 @@ impl Display for FileMode {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileUser(String);
 
 impl FileUser {
@@ -99,7 +98,7 @@ impl Display for FileUser {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileGroup(String);
 
 impl FileGroup {

@@ -39,8 +39,7 @@ pub(super) async fn setup_overlay(
         );
         // qemu-img accepts a bare byte count as the size argument, so passing
         // raw bytes avoids any unit-suffix parsing surprises.
-        let size_bytes =
-            disk_size.map_or(DEFAULT_OVERLAY_VIRTUAL_SIZE_BYTES, u64::from);
+        let size_bytes = disk_size.map_or(DEFAULT_OVERLAY_VIRTUAL_SIZE_BYTES, u64::from);
         let size_arg = size_bytes.to_string();
 
         Command::new("qemu-img")

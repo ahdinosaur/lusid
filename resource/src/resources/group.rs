@@ -1,15 +1,13 @@
 use std::{collections::BTreeSet, fmt::Display};
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_operation::{Operation, operations::group::GroupOperation};
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{FromRimu, ParseError, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -19,8 +17,7 @@ use crate::ResourceType;
 /// Tagged by `state: "present" | "absent"`. Mirrors the shape used by Salt
 /// (`group.present`) and Ansible (`ansible.builtin.group`), with an additional
 /// `append_users` field to declaratively guarantee supplementary group membership.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub enum GroupParams {
     Present {
         name: String,
@@ -37,6 +34,27 @@ pub enum GroupParams {
     Absent {
         name: String,
     },
+}
+
+impl FromRimu for GroupParams {
+    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let state = fields.take_discriminator("state", &["present", "absent"])?;
+        let out = match state {
+            "present" => GroupParams::Present {
+                name: fields.required_string("name")?,
+                gid: fields.optional_u32("gid")?,
+                system: fields.optional_bool("system")?,
+                append_users: fields.optional_string_list("append_users")?,
+            },
+            "absent" => GroupParams::Absent {
+                name: fields.required_string("name")?,
+            },
+            _ => unreachable!(),
+        };
+        fields.finish()?;
+        Ok(out)
+    }
 }
 
 impl Display for GroupParams {
@@ -151,37 +169,6 @@ pub struct Group;
 #[async_trait]
 impl ResourceType for Group {
     const ID: &'static str = "group";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |typ, required: bool| {
-            let mut param = ParamField::new(typ);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-        let string_list = || ParamType::List {
-            item: Box::new(Spanned::new(ParamType::String, span.clone())),
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Union(vec![
-                indexmap! {
-                    "state".to_string() => field(ParamType::Literal("present".into()), true),
-                    "name".to_string() => field(ParamType::String, true),
-                    "gid".to_string() => field(ParamType::Number, false),
-                    "system".to_string() => field(ParamType::Boolean, false),
-                    "append_users".to_string() => field(string_list(), false),
-                },
-                indexmap! {
-                    "state".to_string() => field(ParamType::Literal("absent".into()), true),
-                    "name".to_string() => field(ParamType::String, true),
-                },
-            ]),
-            span,
-        ))
-    }
 
     type Params = GroupParams;
     type Resource = GroupResource;

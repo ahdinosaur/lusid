@@ -1,24 +1,37 @@
 use std::fmt::Display;
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_operation::{Operation, operations::systemd::SystemdOperation};
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{FromRimu, ParseError, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SystemdParams {
     pub name: String,
     pub enabled: Option<bool>,
     pub active: Option<bool>,
+}
+
+impl FromRimu for SystemdParams {
+    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let name = fields.required_string("name")?;
+        let enabled = fields.optional_bool("enabled")?;
+        let active = fields.optional_bool("active")?;
+        fields.finish()?;
+        Ok(SystemdParams {
+            name,
+            enabled,
+            active,
+        })
+    }
 }
 
 impl Display for SystemdParams {
@@ -126,26 +139,6 @@ pub struct Systemd;
 #[async_trait]
 impl ResourceType for Systemd {
     const ID: &'static str = "systemd";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |typ, required: bool| {
-            let mut param = ParamField::new(typ);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Struct(indexmap! {
-                "name".to_string() => field(ParamType::String, true),
-                "enabled".to_string() => field(ParamType::Boolean, false),
-                "active".to_string() => field(ParamType::Boolean, false),
-            }),
-            span,
-        ))
-    }
 
     type Params = SystemdParams;
     type Resource = SystemdResource;

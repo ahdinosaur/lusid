@@ -1,7 +1,6 @@
 use std::fmt::{self, Display};
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
@@ -12,16 +11,14 @@ use lusid_operation::{
         file::{FileGroup, FileMode, FilePath, FileUser},
     },
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{FromRimu, ParseError, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub enum DirectoryParams {
     Present {
         path: FilePath,
@@ -32,6 +29,27 @@ pub enum DirectoryParams {
     Absent {
         path: FilePath,
     },
+}
+
+impl FromRimu for DirectoryParams {
+    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let state = fields.take_discriminator("state", &["present", "absent"])?;
+        let out = match state {
+            "present" => DirectoryParams::Present {
+                path: FilePath::new(fields.required_target_path("path")?),
+                mode: fields.optional_u32("mode")?.map(FileMode::new),
+                user: fields.optional_string("user")?.map(FileUser::new),
+                group: fields.optional_string("group")?.map(FileGroup::new),
+            },
+            "absent" => DirectoryParams::Absent {
+                path: FilePath::new(fields.required_target_path("path")?),
+            },
+            _ => unreachable!(),
+        };
+        fields.finish()?;
+        Ok(out)
+    }
 }
 
 impl Display for DirectoryParams {
@@ -160,34 +178,6 @@ pub struct Directory;
 #[async_trait]
 impl ResourceType for Directory {
     const ID: &'static str = "directory";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |ty, required: bool| {
-            let mut param = ParamField::new(ty);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Union(vec![
-                indexmap! {
-                  "state".to_string() => field(ParamType::Literal("present".into()), true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                  "mode".to_string() => field(ParamType::Number, false),
-                  "user".to_string() => field(ParamType::String, false),
-                  "group".to_string() => field(ParamType::String, false),
-                },
-                indexmap! {
-                  "state".to_string() => field(ParamType::Literal("absent".into()), true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                },
-            ]),
-            span,
-        ))
-    }
 
     type Params = DirectoryParams;
     type Resource = DirectoryResource;

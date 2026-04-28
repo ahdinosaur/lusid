@@ -4,8 +4,8 @@
 //! system entity. The pipeline for every resource is the same five-step shape,
 //! captured by the [`ResourceType`] trait:
 //!
-//! 1. **Params** — friendly user-facing struct, deserialised from the plan's Rimu
-//!    value via the declared [`ParamTypes`] schema.
+//! 1. **Params** — friendly user-facing struct, parsed from the plan's Rimu
+//!    value via [`FromRimu`] (one-pass shape validation + typed extraction).
 //! 2. **Resource** — one or more "atoms" produced from Params. One apt
 //!    `packages: [a, b]` param expands to two atoms (one per package). Atoms are
 //!    arranged in a [`CausalityTree`] so resource-internal ordering can be declared.
@@ -30,10 +30,8 @@ use async_trait::async_trait;
 use lusid_causality::CausalityTree;
 use lusid_ctx::Context;
 use lusid_operation::Operation;
-use lusid_params::ParamTypes;
+use lusid_params::FromRimu;
 use lusid_view::Render;
-use rimu::Spanned;
-use serde::de::DeserializeOwned;
 use thiserror::Error;
 
 mod resources;
@@ -70,11 +68,11 @@ pub trait ResourceType {
     /// Stable identifier used as the `@core/<ID>` module name in plans.
     const ID: &'static str;
 
-    /// Rimu schema used to validate this resource's params. `None` means "no fields".
-    fn param_types() -> Option<Spanned<ParamTypes>>;
-
-    /// User-facing params struct (deserialised from the plan's Rimu value).
-    type Params: Render + DeserializeOwned;
+    /// User-facing params struct, parsed directly from the plan's Rimu value
+    /// via [`FromRimu`]. Each variant of the struct/enum corresponds to an
+    /// allowed shape — the parser does shape validation and typed extraction
+    /// in one pass.
+    type Params: Render + FromRimu;
 
     /// Indivisible unit of managed state. One `Params` may produce many atoms (e.g. one
     /// per package in a packages list).

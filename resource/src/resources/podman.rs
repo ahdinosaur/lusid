@@ -3,7 +3,6 @@ use std::fmt::Display;
 use std::fmt::Write;
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
@@ -11,9 +10,9 @@ use lusid_operation::{
     Operation,
     operations::podman::{CONFIG_HASH_LABEL, PodmanOperation},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{FromRimu, ParseError, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
+use rimu::{Spanned, Value};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -30,8 +29,7 @@ use crate::ResourceType;
 /// An upstream change to a floating tag (e.g. `nginx:latest` republished)
 /// will not trigger a recreate — pin with `@sha256:...` for digest-level
 /// control.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub enum PodmanParams {
     Present {
         name: String,
@@ -46,6 +44,31 @@ pub enum PodmanParams {
     Absent {
         name: String,
     },
+}
+
+impl FromRimu for PodmanParams {
+    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let state = fields.take_discriminator("state", &["present", "absent"])?;
+        let out = match state {
+            "present" => PodmanParams::Present {
+                name: fields.required_string("name")?,
+                image: fields.required_string("image")?,
+                command: fields.optional_string_list("command")?,
+                env: fields.optional_string_list("env")?,
+                ports: fields.optional_string_list("ports")?,
+                volumes: fields.optional_string_list("volumes")?,
+                restart_policy: fields.optional_string("restart_policy")?,
+                running: fields.optional_bool("running")?,
+            },
+            "absent" => PodmanParams::Absent {
+                name: fields.required_string("name")?,
+            },
+            _ => unreachable!(),
+        };
+        fields.finish()?;
+        Ok(out)
+    }
 }
 
 impl Display for PodmanParams {
@@ -226,41 +249,6 @@ pub struct Podman;
 #[async_trait]
 impl ResourceType for Podman {
     const ID: &'static str = "podman";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |typ, required: bool| {
-            let mut param = ParamField::new(typ);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-        let string_list = || ParamType::List {
-            item: Box::new(Spanned::new(ParamType::String, span.clone())),
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Union(vec![
-                indexmap! {
-                    "state".to_string() => field(ParamType::Literal("present".into()), true),
-                    "name".to_string() => field(ParamType::String, true),
-                    "image".to_string() => field(ParamType::String, true),
-                    "command".to_string() => field(string_list(), false),
-                    "env".to_string() => field(string_list(), false),
-                    "ports".to_string() => field(string_list(), false),
-                    "volumes".to_string() => field(string_list(), false),
-                    "restart_policy".to_string() => field(ParamType::String, false),
-                    "running".to_string() => field(ParamType::Boolean, false),
-                },
-                indexmap! {
-                    "state".to_string() => field(ParamType::Literal("absent".into()), true),
-                    "name".to_string() => field(ParamType::String, true),
-                },
-            ]),
-            span,
-        ))
-    }
 
     type Params = PodmanParams;
     type Resource = PodmanResource;

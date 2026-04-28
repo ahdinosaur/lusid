@@ -1,7 +1,6 @@
 use std::{fmt::Display, str::FromStr};
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command as RunCommand, CommandError as RunCommandError};
 use lusid_ctx::Context;
@@ -9,29 +8,47 @@ use lusid_operation::{
     Operation,
     operations::command::{CommandExecutor, CommandOperation},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{FromRimu, ParseError, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "status")]
+#[derive(Debug, Clone)]
 pub enum CommandParams {
-    #[serde(rename = "install")]
     Install {
         is_installed: Option<String>,
         install: String,
         uninstall: Option<String>,
     },
-    #[serde(rename = "uninstall")]
     Uninstall {
         is_installed: Option<String>,
         install: Option<String>,
         uninstall: String,
     },
+}
+
+impl FromRimu for CommandParams {
+    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let status = fields.take_discriminator("status", &["install", "uninstall"])?;
+        let out = match status {
+            "install" => CommandParams::Install {
+                is_installed: fields.optional_string("is_installed")?,
+                install: fields.required_string("install")?,
+                uninstall: fields.optional_string("uninstall")?,
+            },
+            "uninstall" => CommandParams::Uninstall {
+                is_installed: fields.optional_string("is_installed")?,
+                install: fields.optional_string("install")?,
+                uninstall: fields.required_string("uninstall")?,
+            },
+            _ => unreachable!(),
+        };
+        fields.finish()?;
+        Ok(out)
+    }
 }
 
 impl Display for CommandParams {
@@ -157,43 +174,6 @@ pub struct Command;
 #[async_trait]
 impl ResourceType for Command {
     const ID: &'static str = "command";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-
-        let status_field = Spanned::new(ParamField::new(ParamType::String), span.clone());
-        let is_installed_field = Spanned::new(
-            ParamField::new(ParamType::String).with_optional(),
-            span.clone(),
-        );
-
-        Some(Spanned::new(
-            ParamTypes::Union(vec![
-                indexmap! {
-                    "status".to_string() => status_field.clone(),
-                    "is_installed".to_string() => is_installed_field.clone(),
-                    "install".to_string() => Spanned::new(ParamField::new(ParamType::String), span.clone()),
-                    "uninstall".to_string() =>
-                        Spanned::new(
-                            ParamField::new(ParamType::String).with_optional(),
-                            span.clone(),
-                        ),
-                },
-                indexmap! {
-                    "status".to_string() => status_field,
-                    "is_installed".to_string() => is_installed_field,
-                    "uninstall".to_string() => Spanned::new(ParamField::new(ParamType::String),
-                        span.clone()),
-                    "install".to_string() =>
-                        Spanned::new(
-                            ParamField::new(ParamType::String).with_optional(),
-                            span.clone(),
-                        ),
-                },
-            ]),
-            span,
-        ))
-    }
 
     type Params = CommandParams;
     type Resource = CommandResource;

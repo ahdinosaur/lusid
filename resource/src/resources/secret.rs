@@ -24,17 +24,15 @@
 use std::fmt::{self, Display};
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_ctx::Context;
 use lusid_operation::{
     Operation,
     operations::file::{FileGroup, FileMode, FilePath, FileUser},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{FromRimu, ParseError, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 
 use crate::ResourceType;
 use crate::resources::file::{File, FileChange, FileResource, FileState, FileStateError};
@@ -44,13 +42,32 @@ use crate::resources::file::{File, FileChange, FileResource, FileState, FileStat
 /// deliberately group-readable for a multi-user service).
 pub const DEFAULT_MODE: u32 = 0o600;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct SecretParams {
     pub name: String,
     pub path: FilePath,
     pub mode: Option<FileMode>,
     pub user: Option<FileUser>,
     pub group: Option<FileGroup>,
+}
+
+impl FromRimu for SecretParams {
+    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let name = fields.required_string("name")?;
+        let path = FilePath::new(fields.required_target_path("path")?);
+        let mode = fields.optional_u32("mode")?.map(FileMode::new);
+        let user = fields.optional_string("user")?.map(FileUser::new);
+        let group = fields.optional_string("group")?.map(FileGroup::new);
+        fields.finish()?;
+        Ok(SecretParams {
+            name,
+            path,
+            mode,
+            user,
+            group,
+        })
+    }
 }
 
 impl Display for SecretParams {
@@ -67,28 +84,6 @@ pub struct Secret;
 #[async_trait]
 impl ResourceType for Secret {
     const ID: &'static str = "secret";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |ty, required: bool| {
-            let mut param = ParamField::new(ty);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Struct(indexmap! {
-                "name".to_string() => field(ParamType::String, true),
-                "path".to_string() => field(ParamType::TargetPath, true),
-                "mode".to_string() => field(ParamType::Number, false),
-                "user".to_string() => field(ParamType::String, false),
-                "group".to_string() => field(ParamType::String, false),
-            }),
-            span,
-        ))
-    }
 
     type Params = SecretParams;
     type Resource = FileResource;

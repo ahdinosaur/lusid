@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+lusid-secrets = { path = "../secrets", version = "0.1" }
 rimu-interop = { path = "../rimu-interop", version = "0.1" }
 displaydoc.workspace = true
 indexmap.workspace = true
 rimu.workspace = true
+rust_decimal = { version = "1.39.0", default-features = false }
+secrecy.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
