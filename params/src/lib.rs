@@ -16,10 +16,14 @@
 //!
 //! # Path-type conventions (see also AGENTS.md)
 //!
-//! - [`ParamType::HostPath`]: a **relative** string, resolved against the source
-//!   file's directory at value-conversion time (via [`rimu::Span::source`]).
-//! - [`ParamType::TargetPath`]: an **absolute** string, used as-is on the managed
-//!   machine.
+//! - [`ParamType::HostPath`]: a path on the local machine, normally produced by
+//!   Rimu's `host_path("./rel")` stdlib function (which resolves relative to
+//!   the source file's directory at construction time). For back-compat,
+//!   plain relative strings are still accepted and resolved here against
+//!   [`rimu::Span::source`].
+//! - [`ParamType::TargetPath`]: an absolute path on the managed machine,
+//!   normally produced by Rimu's `target_path("/abs")` stdlib function.
+//!   Plain absolute strings are still accepted for back-compat.
 //!
 //! # Union semantics
 //!
@@ -65,8 +69,10 @@ pub type Secret = Arc<SecretBox<String>>;
 ///   specific `type: "foo"` field).
 /// - `List` / `Object` are homogeneous containers — every element/value matches
 ///   the inner type.
-/// - `HostPath` / `TargetPath` are `String` at the Rimu level but carry stricter
-///   semantics (relative vs absolute; see module docs).
+/// - `HostPath` / `TargetPath` accept Rimu's first-class typed paths
+///   ([`Value::HostPath`] / [`Value::TargetPath`]) or — for back-compat — a
+///   plain [`Value::String`] that satisfies the relative/absolute requirement
+///   (see module docs).
 /// - `Secret` is `String` at the Rimu level, but materialises into a
 ///   [`ParamValue::Secret`] so downstream code holds a redacted-on-Debug
 ///   [`SecretString`] rather than plaintext.
@@ -129,9 +135,11 @@ pub enum ParamTypes {
 
 /// A parameter value after type-directed conversion.
 ///
-/// Mirrors [`ParamType`] variants but holds a concrete value. Notably,
-/// `HostPath` becomes a fully-resolved absolute [`PathBuf`], so downstream
-/// consumers never need to know where the source file lived.
+/// Mirrors [`ParamType`] variants but holds a concrete value. `HostPath`
+/// holds a [`PathBuf`] resolved by Rimu's `host_path(...)` against the source
+/// file's directory (or by the back-compat plain-string branch in
+/// [`Self::from_rimu_spanned`]) — downstream consumers never need to know
+/// where the source file lived.
 ///
 /// `Secret` wraps its plaintext in a [`Secret`] (an `Arc<SecretBox<String>>`) so
 /// clones are cheap and `Debug` stays redacted.
@@ -171,8 +179,13 @@ impl ParamValue {
                     .collect();
                 Value::Object(map)
             }
-            ParamValue::HostPath(path) => Value::String(path.to_string_lossy().into_owned()),
-            ParamValue::TargetPath(path) => Value::String(path),
+            // Now that Rimu has first-class `HostPath` / `TargetPath`, produce
+            // the typed forms — downstream consumers (nested plan params,
+            // resources implementing `FromRimu`) keep the path-vs-string
+            // distinction end-to-end instead of round-tripping through a bare
+            // `Value::String`.
+            ParamValue::HostPath(path) => Value::HostPath(path),
+            ParamValue::TargetPath(path) => Value::TargetPath(path),
             ParamValue::Secret(secret) => Value::String(secret.expose_secret().to_owned()),
         }
     }
@@ -267,12 +280,16 @@ impl ParamValue {
                     .collect::<Result<_, _>>()?;
                 Ok(ParamValue::Object(object))
             }
+            // Rimu's `host_path("./rel")` resolves the relative input against
+            // the source-file directory at construction time, so the [`PathBuf`]
+            // here is already in the form downstream consumers want — pass it
+            // through unchanged.
+            (ParamType::HostPath, Value::HostPath(path)) => Ok(ParamValue::HostPath(path)),
+
+            // Plain-string back-compat path. Resolve the relative input against
+            // the source file's directory the same way Rimu's `host_path` would
+            // — without a parent directory we'd have nowhere to resolve against.
             (ParamType::HostPath, Value::String(value)) => {
-                // HostPath: a relative string, resolved against the source file's
-                // directory so `source: "./gitconfig"` in `~/plans/foo.lusid` becomes
-                // `~/plans/gitconfig`. This is why Rimu spans must carry a filesystem
-                // source id — without a parent directory we'd have nowhere to resolve
-                // against.
                 let value_path = PathBuf::from(value);
                 let source_path = PathBuf::from(span.source().as_str());
                 let source_dir_path = source_path.parent();
@@ -283,6 +300,7 @@ impl ParamValue {
                     Err(ParamValueFromRimuError::HostPathSourceNeedsParent { source_path })
                 }
             }
+            (ParamType::TargetPath, Value::TargetPath(path)) => Ok(ParamValue::TargetPath(path)),
             (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
             (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Arc::new(
                 SecretBox::new(Box::new(value)),
@@ -706,25 +724,24 @@ fn validate_type(
             _ => Err(mismatch(param_type, value)),
         },
 
-        ParamType::HostPath => {
-            #[allow(clippy::collapsible_if)]
-            if let Value::String(path) = value_inner {
-                if Path::new(path).is_relative() {
-                    return Ok(());
-                }
-            }
-            Err(mismatch(param_type, value))
-        }
+        // Accept Rimu's first-class `Value::HostPath` directly. Plain
+        // strings are still allowed for back-compat with plans (and host-side
+        // helpers like `to_rimu` for `User::home`) that haven't migrated to
+        // the `host_path("./rel")` stdlib constructor; relative-path enforcement
+        // matches the pre-typed-path behavior.
+        ParamType::HostPath => match value_inner {
+            Value::HostPath(_) => Ok(()),
+            Value::String(path) if Path::new(path).is_relative() => Ok(()),
+            _ => Err(mismatch(param_type, value)),
+        },
 
-        ParamType::TargetPath => {
-            #[allow(clippy::collapsible_if)]
-            if let Value::String(path) = value_inner {
-                if Path::new(path).is_absolute() {
-                    return Ok(());
-                }
-            }
-            Err(mismatch(param_type, value))
-        }
+        // Same shape as `HostPath`: accept the typed form, fall through to a
+        // plain (absolute) string for back-compat.
+        ParamType::TargetPath => match value_inner {
+            Value::TargetPath(_) => Ok(()),
+            Value::String(path) if Path::new(path).is_absolute() => Ok(()),
+            _ => Err(mismatch(param_type, value)),
+        },
 
         ParamType::Secret => match value_inner {
             // Note(cc): empty-string secrets pass — a secret file can legitimately
