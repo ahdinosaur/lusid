@@ -18,3 +18,10 @@ mod to_rimu;
 pub use crate::error::*;
 pub use crate::from_rimu::*;
 pub use crate::to_rimu::*;
+
+/// Derive `FromRimu` for a struct or tagged/untagged enum.
+///
+/// See `rimu-interop-macros` for supported attributes
+/// (`#[rimu(tag = "...")]`, `#[rimu(untagged)]`, `#[rimu(rename_all = "...")]`,
+/// `#[rimu(rename = "...")]`).
+pub use rimu_interop_macros::FromRimu;

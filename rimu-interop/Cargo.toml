@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+rimu-interop-macros = { path = "../rimu-interop-macros", version = "0.1" }
 displaydoc.workspace = true
 indexmap.workspace = true
 rimu.workspace = true

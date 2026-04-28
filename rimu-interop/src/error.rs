@@ -31,11 +31,16 @@ pub enum FromRimuError {
     /// expected discriminant field "{tag}" to be a string, got {got:?}
     DiscriminantNotAString {
         tag: &'static str,
+        span: Span,
         got: Box<Value>,
     },
 
     /// unknown variant "{value}" for tag "{tag}"
-    UnknownVariant { tag: &'static str, value: String },
+    UnknownVariant {
+        tag: &'static str,
+        span: Span,
+        value: String,
+    },
 
     /// no variant matched the value
     NoVariantMatched {
