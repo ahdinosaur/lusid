@@ -324,9 +324,7 @@ impl ParamValue {
             }
             (ParamType::TargetPath, Value::TargetPath(path)) => Ok(ParamValue::TargetPath(path)),
             (ParamType::TargetPath, Value::String(value)) => Ok(ParamValue::TargetPath(value)),
-            (ParamType::Secret, Value::String(value)) => {
-                Ok(ParamValue::Secret(Secret::new(value)))
-            }
+            (ParamType::Secret, Value::String(value)) => Ok(ParamValue::Secret(Secret::new(value))),
             (typ, value) => Err(ParamValueFromRimuError::UnexpectedParamTypeValueCase {
                 typ: Box::new(typ),
                 value: Box::new(value),

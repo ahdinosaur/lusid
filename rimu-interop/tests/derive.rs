@@ -73,10 +73,7 @@ fn plain_struct_optional_field_null_is_none() {
 fn plain_struct_missing_required_errors() {
     let value = obj([("name", Value::String("hi".into()))]);
     let err = Plain::from_rimu(value).unwrap_err();
-    assert!(matches!(
-        err,
-        FromRimuError::MissingField { name: "count" }
-    ));
+    assert!(matches!(err, FromRimuError::MissingField { name: "count" }));
 }
 
 #[test]
@@ -206,7 +203,10 @@ fn untagged_enum_first_match_wins() {
 fn untagged_enum_falls_through_to_second() {
     let many = obj([(
         "items",
-        Value::List(vec![s(Value::String("a".into())), s(Value::String("b".into()))]),
+        Value::List(vec![
+            s(Value::String("a".into())),
+            s(Value::String("b".into())),
+        ]),
     )]);
     let parsed = Untagged::from_rimu(many).unwrap();
     assert_eq!(

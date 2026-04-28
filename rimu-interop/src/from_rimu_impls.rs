@@ -129,9 +129,7 @@ where
         }
     }
 
-    fn from_rimu_spanned(
-        value: Spanned<Value>,
-    ) -> Result<Spanned<Self>, Spanned<Self::Error>> {
+    fn from_rimu_spanned(value: Spanned<Value>) -> Result<Spanned<Self>, Spanned<Self::Error>> {
         let span = value.span();
         match value.inner() {
             Value::Null => Ok(Spanned::new(None, span)),

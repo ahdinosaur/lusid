@@ -119,14 +119,20 @@ fn parse_container_attrs(attrs: &[Attribute]) -> syn::Result<ContainerAttrs> {
                 }
                 Meta::NameValue(MetaNameValue {
                     path,
-                    value: Expr::Lit(ExprLit { lit: Lit::Str(s), .. }),
+                    value:
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }),
                     ..
                 }) if path.is_ident("tag") => {
                     out.tag = Some(s.value());
                 }
                 Meta::NameValue(MetaNameValue {
                     path,
-                    value: Expr::Lit(ExprLit { lit: Lit::Str(s), .. }),
+                    value:
+                        Expr::Lit(ExprLit {
+                            lit: Lit::Str(s), ..
+                        }),
                     ..
                 }) if path.is_ident("rename_all") => {
                     let value = s.value();
@@ -143,10 +149,7 @@ fn parse_container_attrs(attrs: &[Attribute]) -> syn::Result<ContainerAttrs> {
                     });
                 }
                 other => {
-                    return Err(Error::new_spanned(
-                        other,
-                        "unrecognised rimu attribute",
-                    ));
+                    return Err(Error::new_spanned(other, "unrecognised rimu attribute"));
                 }
             }
         }
@@ -170,7 +173,10 @@ fn parse_variant_attrs(attrs: &[Attribute]) -> syn::Result<VariantAttrs> {
         for meta in metas {
             if let Meta::NameValue(MetaNameValue {
                 path,
-                value: Expr::Lit(ExprLit { lit: Lit::Str(s), .. }),
+                value:
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }),
                 ..
             }) = &meta
                 && path.is_ident("rename")
@@ -195,7 +201,10 @@ fn parse_field_attrs(attrs: &[Attribute]) -> syn::Result<FieldAttrs> {
         for meta in metas {
             if let Meta::NameValue(MetaNameValue {
                 path,
-                value: Expr::Lit(ExprLit { lit: Lit::Str(s), .. }),
+                value:
+                    Expr::Lit(ExprLit {
+                        lit: Lit::Str(s), ..
+                    }),
                 ..
             }) = &meta
                 && path.is_ident("rename")
@@ -385,10 +394,7 @@ fn expand_enum(input: &DeriveInput, data: &DataEnum) -> syn::Result<TokenStream2
 
 /// Compute the discriminant string that selects this variant, applying
 /// variant-level `rename` (highest priority) or container-level `rename_all`.
-fn variant_discriminant(
-    variant: &Variant,
-    rename_all: Option<RenameAll>,
-) -> syn::Result<String> {
+fn variant_discriminant(variant: &Variant, rename_all: Option<RenameAll>) -> syn::Result<String> {
     let attrs = parse_variant_attrs(&variant.attrs)?;
     if let Some(name) = attrs.rename {
         return Ok(name);
