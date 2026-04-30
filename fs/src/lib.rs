@@ -660,6 +660,13 @@ pub async fn remove_file<P: AsRef<Path>>(path: P) -> Result<(), FsError> {
 /// Replaces an existing regular file or symlink at `to`. Fails (with
 /// `ENOTEMPTY`/`EISDIR`) if `to` is a non-empty directory — convert via an
 /// explicit `state: "absent"` first.
+///
+/// Note(cc): `from` is not stat-checked here. `lusid-resource`'s
+/// `validate_host_paths` checks the source up front, but the source can
+/// disappear in the gap between validation and apply, in which case this
+/// silently produces a dangling symlink. If dangling-link confusion ever
+/// surfaces in practice, add an `lstat(from)` here and surface a dedicated
+/// `FsError::SymlinkSourceMissing`.
 pub async fn create_symlink_atomic<F: AsRef<Path>, T: AsRef<Path>>(
     from: F,
     to: T,

@@ -612,10 +612,11 @@ impl ResourceParams {
     }
 }
 
-/// Resolve `path`'s metadata, following a single layer of symlink. Returns
-/// `Ok(None)` if `path` (or its symlink target) does not exist, so callers
-/// can map both into a "source missing" diagnostic without caring whether the
-/// dangling part is the path or the link target.
+/// Resolve `path`'s metadata, classifying symlink chains by what they
+/// ultimately resolve to. Returns `Ok(None)` if `path` (or anywhere along its
+/// symlink chain) does not exist, so callers can map both into a "source
+/// missing" diagnostic without caring whether the dangling part is the path
+/// itself or somewhere down the link chain.
 async fn resolved_metadata(path: &std::path::Path) -> Result<Option<std::fs::Metadata>, FsError> {
     let metadata = match tokio::fs::symlink_metadata(path).await {
         Ok(m) => m,
@@ -630,9 +631,10 @@ async fn resolved_metadata(path: &std::path::Path) -> Result<Option<std::fs::Met
     if !metadata.file_type().is_symlink() {
         return Ok(Some(metadata));
     }
-    // Symlink — follow once. A dangling target reads as NotFound; surface as
-    // None so the caller's `Missing` diagnostic fires (the link is useless
-    // either way).
+    // Symlink — `tokio::fs::metadata` is `stat(2)`, which walks the full
+    // chain. Dangling anywhere along the chain reads as NotFound; surface
+    // as None so the caller's `Missing` diagnostic fires (the link is
+    // useless either way).
     match tokio::fs::metadata(path).await {
         Ok(m) => Ok(Some(m)),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),

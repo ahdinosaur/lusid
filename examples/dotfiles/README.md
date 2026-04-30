@@ -32,5 +32,8 @@ expected type (regular file for `@core/file`, directory for `@core/directory`).
 lusid --config examples/dotfiles/lusid.toml local apply
 ```
 
-Override `home` in `lusid.toml` (or pass `--params '{"home": "/home/<you>"}'`)
-so the symlinks land somewhere you actually own.
+The plan reads `system.user.home` (the `$HOME` of whoever runs apply), so
+the symlinks always land under the invoking user's home — no config edits
+needed. Back up any existing `~/.zshrc` or `~/.config/helix` first if you
+don't want them clobbered: the `linked` state replaces a regular file or
+stale symlink at `path` atomically.

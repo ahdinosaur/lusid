@@ -38,7 +38,10 @@ pub enum DirectoryParams {
     /// Materialise `path` as a symlink to the directory at `source` (a
     /// host-path on the machine running apply). Mirror of
     /// [`FileParams::Linked`](super::file::FileParams::Linked); same rationale
-    /// for refusing `mode`/`user`/`group` here at the parser level.
+    /// for refusing `mode`/`user`/`group` here at the parser level, and
+    /// same `Note(cc)` about absolute symlink targets — see
+    /// [`FileParams::Linked`](super::file::FileParams::Linked) for the
+    /// relative-target follow-up.
     Linked {
         source: FilePath,
         path: FilePath,

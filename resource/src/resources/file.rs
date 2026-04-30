@@ -38,6 +38,14 @@ pub enum FileParams {
     /// follows the link, lchmod doesn't exist), and we don't want
     /// chmod/chown silently mutating the operator's source file via the
     /// link, so the parser refuses those fields here.
+    ///
+    /// Note(cc): `source` arrives here as an *absolute* host-path — the
+    /// `host-path` param-type coercion resolves relative strings against
+    /// the plan's source dir before this point. The created symlink target
+    /// is therefore absolute, so moving the source repo breaks every link.
+    /// GNU stow defaults to relative for that reason; if relative-target
+    /// becomes a use-case, add an opt-in `relative: true` field here and
+    /// thread it through `FileChange::CreateSymlink` to the operation.
     Linked {
         source: FilePath,
         path: FilePath,

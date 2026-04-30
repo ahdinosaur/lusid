@@ -10,6 +10,6 @@ hostname = "localhost"
 arch = "x86-64"
 os = { type = "linux", linux = "debian" }
 plan = "./dotfiles.lusid"
-# `home` is whichever directory the symlinks should land under. Override with
-# `--params '{"home": "/home/<you>"}'` or edit here.
-params = { home = "/home/me" }
+# The plan reads `system.user.home` directly, so no params are needed —
+# `lusid local apply` drops symlinks under whatever `$HOME` the invoking
+# shell has.

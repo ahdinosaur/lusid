@@ -12,21 +12,21 @@ version: "0.1.0"
 # (deployable artifacts, system configs, anything reachable over dev/remote
 # apply where the operator's filesystem isn't accessible).
 
-params:
-  home:
-    type: "target-path"
+params: {}
 
-setup: (params) =>
+setup: (params, system) =>
   # Symlink a single config file. `<home>/.zshrc` will point at this repo's
   # `./files/zshrc` — edits to the source propagate to the link target
-  # immediately. `<home>` itself is assumed to exist; only nested dirs like
+  # immediately. `<home>` is `system.user.home`, the `$HOME` of whoever ran
+  # `lusid local apply`, so this plan works without any params overrides.
+  # `<home>` itself is assumed to exist; only nested dirs like
   # `<home>/.config` need explicit `state: "present"` declarations below.
   - module: "@core/file"
     id: "zshrc"
     params:
       state: "linked"
       source: "./files/zshrc"
-      path: params.home + "/.zshrc"
+      path: system.user.home + "/.zshrc"
 
   # Symlink an entire config directory. The `<home>/.config` parent has to
   # exist before the symlink is created, so we declare it explicitly.
@@ -34,7 +34,7 @@ setup: (params) =>
     id: "config-dir"
     params:
       state: "present"
-      path: params.home + "/.config"
+      path: system.user.home + "/.config"
 
   - module: "@core/directory"
     id: "helix-dir"
@@ -43,4 +43,4 @@ setup: (params) =>
     params:
       state: "linked"
       source: "./files/helix"
-      path: params.home + "/.config/helix"
+      path: system.user.home + "/.config/helix"
