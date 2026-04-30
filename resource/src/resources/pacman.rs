@@ -1,24 +1,38 @@
 use std::fmt::Display;
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_operation::{Operation, operations::pacman::PacmanOperation};
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone)]
 pub enum PacmanParams {
     Package { package: String },
     Packages { packages: Vec<String> },
+}
+
+impl ParseParams for PacmanParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let out = if fields.has("packages") {
+            PacmanParams::Packages {
+                packages: fields.required_string_list("packages")?,
+            }
+        } else {
+            PacmanParams::Package {
+                package: fields.required_string("package")?,
+            }
+        };
+        fields.finish()?;
+        Ok(out)
+    }
 }
 
 impl Display for PacmanParams {
@@ -97,27 +111,6 @@ pub struct Pacman;
 #[async_trait]
 impl ResourceType for Pacman {
     const ID: &'static str = "pacman";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        Some(Spanned::new(
-            ParamTypes::Union(vec![
-                indexmap! {
-                    "package".to_string() =>
-                        Spanned::new(ParamField::new(ParamType::String), span.clone()),
-                },
-                indexmap! {
-                    "packages".to_string() => Spanned::new(
-                        ParamField::new(ParamType::List {
-                            item: Box::new(Spanned::new(ParamType::String, span.clone())),
-                        }),
-                        span.clone(),
-                    ),
-                },
-            ]),
-            span,
-        ))
-    }
 
     type Params = PacmanParams;
     type Resource = PacmanResource;

@@ -1,7 +1,6 @@
 use std::{collections::BTreeSet, fmt::Display};
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
@@ -9,10 +8,9 @@ use lusid_operation::{
     Operation,
     operations::{file::FilePath, user::UserOperation},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -24,8 +22,7 @@ use crate::ResourceType;
 // TODO(cc): add password (hashed), lock/unlock (`usermod -L`/`-U`), and account
 // expiry (`chage` / `usermod --expiredate`) support. Salt and Ansible both expose
 // these.
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub enum UserParams {
     Present {
         name: String,
@@ -47,6 +44,33 @@ pub enum UserParams {
         name: String,
         remove_home: Option<bool>,
     },
+}
+
+impl ParseParams for UserParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let state = fields.take_discriminator("state", &["present", "absent"])?;
+        let out = match state {
+            "present" => UserParams::Present {
+                name: fields.required_string("name")?,
+                uid: fields.optional_u32("uid")?,
+                group: fields.optional_string("group")?,
+                append_groups: fields.optional_string_list("append_groups")?,
+                comment: fields.optional_string("comment")?,
+                home: fields.optional_target_path("home")?.map(FilePath::new),
+                shell: fields.optional_string("shell")?,
+                system: fields.optional_bool("system")?,
+                create_home: fields.optional_bool("create_home")?,
+            },
+            "absent" => UserParams::Absent {
+                name: fields.required_string("name")?,
+                remove_home: fields.optional_bool("remove_home")?,
+            },
+            _ => unreachable!(),
+        };
+        fields.finish()?;
+        Ok(out)
+    }
 }
 
 impl Display for UserParams {
@@ -216,43 +240,6 @@ pub struct User;
 #[async_trait]
 impl ResourceType for User {
     const ID: &'static str = "user";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |typ, required: bool| {
-            let mut param = ParamField::new(typ);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-        let string_list = || ParamType::List {
-            item: Box::new(Spanned::new(ParamType::String, span.clone())),
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Union(vec![
-                indexmap! {
-                    "state".to_string() => field(ParamType::Literal("present".into()), true),
-                    "name".to_string() => field(ParamType::String, true),
-                    "uid".to_string() => field(ParamType::Number, false),
-                    "group".to_string() => field(ParamType::String, false),
-                    "append_groups".to_string() => field(string_list(), false),
-                    "comment".to_string() => field(ParamType::String, false),
-                    "home".to_string() => field(ParamType::TargetPath, false),
-                    "shell".to_string() => field(ParamType::String, false),
-                    "system".to_string() => field(ParamType::Boolean, false),
-                    "create_home".to_string() => field(ParamType::Boolean, false),
-                },
-                indexmap! {
-                    "state".to_string() => field(ParamType::Literal("absent".into()), true),
-                    "name".to_string() => field(ParamType::String, true),
-                    "remove_home".to_string() => field(ParamType::Boolean, false),
-                },
-            ]),
-            span,
-        ))
-    }
 
     type Params = UserParams;
     type Resource = UserResource;

@@ -1,25 +1,22 @@
 use std::fmt::{self, Display};
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
 use lusid_operation::{
-    operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
     Operation,
+    operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
+use rimu::{Spanned, Value};
 use secrecy::ExposeSecret;
-use serde::Deserialize;
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "state", rename_all = "kebab-case")]
+#[derive(Debug, Clone)]
 pub enum FileParams {
     Sourced {
         source: FilePath,
@@ -37,6 +34,44 @@ pub enum FileParams {
     Absent {
         path: FilePath,
     },
+}
+
+impl ParseParams for FileParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let state = fields.take_discriminator("state", &["sourced", "present", "absent"])?;
+        let out = match state {
+            "sourced" => FileParams::Sourced {
+                // `source` is a `host-path`; the parser resolves a relative
+                // string against the plan's source dir (or accepts a typed
+                // `Value::HostPath` from a plan that uses `host_path("./...")`).
+                // Either way we lower to a `FilePath` string for the operation
+                // layer.
+                source: FilePath::new(
+                    fields
+                        .required_host_path("source")?
+                        .to_string_lossy()
+                        .into_owned(),
+                ),
+                path: FilePath::new(fields.required_target_path("path")?),
+                mode: fields.optional_u32("mode")?.map(FileMode::new),
+                user: fields.optional_string("user")?.map(FileUser::new),
+                group: fields.optional_string("group")?.map(FileGroup::new),
+            },
+            "present" => FileParams::Present {
+                path: FilePath::new(fields.required_target_path("path")?),
+                mode: fields.optional_u32("mode")?.map(FileMode::new),
+                user: fields.optional_string("user")?.map(FileUser::new),
+                group: fields.optional_string("group")?.map(FileGroup::new),
+            },
+            "absent" => FileParams::Absent {
+                path: FilePath::new(fields.required_target_path("path")?),
+            },
+            _ => unreachable!(),
+        };
+        fields.finish()?;
+        Ok(out)
+    }
 }
 
 impl Display for FileParams {
@@ -214,42 +249,6 @@ pub struct File;
 #[async_trait]
 impl ResourceType for File {
     const ID: &'static str = "file";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |ty, required: bool| {
-            let mut param = ParamField::new(ty);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Union(vec![
-                indexmap! {
-                  "state".to_string() => field(ParamType::Literal("sourced".into()), true),
-                  "source".to_string() => field(ParamType::HostPath, true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                  "mode".to_string() => field(ParamType::Number, false),
-                  "user".to_string() => field(ParamType::String, false),
-                  "group".to_string() => field(ParamType::String, false),
-                },
-                indexmap! {
-                  "state".to_string() => field(ParamType::Literal("present".into()), true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                  "mode".to_string() => field(ParamType::Number, false),
-                  "user".to_string() => field(ParamType::String, false),
-                  "group".to_string() => field(ParamType::String, false),
-                },
-                indexmap! {
-                  "state".to_string() => field(ParamType::Literal("absent".into()), true),
-                  "path".to_string() => field(ParamType::TargetPath, true),
-                },
-            ]),
-            span,
-        ))
-    }
 
     type Params = FileParams;
     type Resource = FileResource;

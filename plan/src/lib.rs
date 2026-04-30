@@ -16,7 +16,7 @@
 //! [`PlanNodeId`] identifiers used by causality scheduling downstream.
 
 use displaydoc::Display;
-use lusid_params::{ParamValuesFromRimuError, ParamsValidationError, validate};
+use lusid_params::{ParamsContext, ParamsValidationError, ParseError, validate};
 use lusid_resource::ResourceParams;
 use lusid_store::{Store, StoreError, StoreItemId};
 use lusid_system::System;
@@ -69,15 +69,24 @@ pub enum PlanError {
 ///
 /// Wraps the recursive subplan in a root [`PlanTree::Branch`] with default metadata so
 /// callers always get a tree (never a bare list).
+///
+/// `ctx` carries the fallback root path used to resolve relative `host-path`
+/// strings — typically the project root. The same `ctx` is shared across the
+/// whole plan tree: each plan's `validate` rewrites string-shaped paths into
+/// the typed Rimu variants before forwarding, so a sub-plan only ever sees a
+/// `Value::String` for a `host-path` field if a literal one was written
+/// in-source (in which case the literal's span source anchors the resolution
+/// directly, not `ctx`).
 #[tracing::instrument(skip_all)]
 pub async fn plan(
     plan_id: PlanId,
     params_value: Option<Spanned<Value>>,
+    ctx: &ParamsContext,
     store: &mut Store,
     system: &System,
 ) -> Result<PlanTree<ResourceParams>, PlanError> {
     tracing::debug!("Plan {plan_id:?} with params {params_value:?}");
-    let children = plan_recursive(plan_id, params_value.as_ref(), store, system).await?;
+    let children = plan_recursive(plan_id, params_value, ctx, store, system).await?;
     let tree = PlanTree::Branch {
         children,
         meta: PlanMeta::default(),
@@ -90,7 +99,8 @@ pub async fn plan(
 /// params, evaluate `setup`, and convert each returned item into a subtree.
 async fn plan_recursive(
     plan_id: PlanId,
-    params_value: Option<&Spanned<Value>>,
+    params_value: Option<Spanned<Value>>,
+    ctx: &ParamsContext,
     store: &mut Store,
     system: &System,
 ) -> Result<Vec<PlanTree<ResourceParams>>, PlanError> {
@@ -112,13 +122,21 @@ async fn plan_recursive(
         setup,
     } = plan.into_inner();
 
-    let params_struct = validate(param_types.as_ref(), params_value)?;
+    // `validate` returns the coerced params value: relative `host-path`
+    // strings have been rewritten into `Value::HostPath`, etc. Feeding the
+    // coerced value into `evaluate` is what makes parent → sub-plan
+    // forwarding work — by the time a forwarded value reaches a sub-plan's
+    // `validate`, it's already typed and just passes through.
+    let coerced_params = validate(param_types.as_ref(), params_value, ctx)?;
 
-    let plan_items = evaluate(setup, params_value.cloned(), params_struct, system)?;
+    let plan_items = evaluate(setup, coerced_params, system)?;
 
     let mut resources = Vec::with_capacity(plan_items.len());
     for plan_item in plan_items {
-        let node = Box::pin(plan_item_to_resource(plan_item, &plan_id, store, system)).await?;
+        let node = Box::pin(plan_item_to_resource(
+            plan_item, &plan_id, ctx, store, system,
+        ))
+        .await?;
         resources.push(node);
     }
 
@@ -130,14 +148,8 @@ pub enum PlanItemToResourceError {
     /// Missing required parameters in plan item
     MissingParams,
 
-    /// Parameters validation for resource failed: {0}
-    ParamsValidation(#[from] ParamsValidationError),
-
-    /// Parameters value from rimu value for resource failed: {0}
-    ParamsValueFromRimu(Spanned<ParamValuesFromRimuError>),
-
-    /// Failed to convert parameter values to resource params: {0}
-    SerdeValue(#[from] rimu::SerdeValueError),
+    /// Failed to parse parameters for resource: {0}
+    Parse(Spanned<ParseError>),
 
     /// Unsupported core module id \"{id}\"
     UnsupportedCoreModuleId { id: String },
@@ -152,6 +164,7 @@ pub enum PlanItemToResourceError {
 async fn plan_item_to_resource(
     plan_item: Spanned<crate::model::PlanItem>,
     current_plan_id: &PlanId,
+    ctx: &ParamsContext,
     store: &mut Store,
     system: &System,
 ) -> Result<PlanTree<ResourceParams>, PlanItemToResourceError> {
@@ -198,7 +211,7 @@ async fn plan_item_to_resource(
     } else {
         let path = PathBuf::from(module.inner());
         let plan_id = current_plan_id.join(path);
-        let children = plan_recursive(plan_id, params_value.as_ref(), store, system)
+        let children = plan_recursive(plan_id, params_value, ctx, store, system)
             .await
             .map_err(Box::new)?;
         Ok(PlanTree::Branch {

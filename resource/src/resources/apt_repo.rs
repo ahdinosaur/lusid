@@ -2,7 +2,6 @@ use std::fmt::Display;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_ctx::Context;
 use lusid_fs::{self as fs, FsError};
@@ -10,10 +9,9 @@ use lusid_operation::{
     Operation,
     operations::{apt_repo::AptRepoOperation, file::FilePath},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -21,16 +19,16 @@ use crate::ResourceType;
 const KEYRINGS_DIR: &str = "/etc/apt/keyrings";
 const SOURCES_LIST_DIR: &str = "/etc/apt/sources.list.d";
 
-// TODO(cc): accept `String | List<String>` for `uris` / `suites` / `components`
-// once `lusid-params` grows a field-level union type. Today the schema is a flat
-// `ParamTypes::Struct` and adding union sugar per field would require N×2
-// candidate structs at the top level (combinatorial blow-up).
+// TODO(cc): accept `String | List<String>` for `uris` / `suites` / `components`.
+// Today every list-shaped field requires a list literal; allowing a bare string
+// would let single-entry plans skip the brackets. The hand-written parser in
+// `ParseParams for AptRepoParams` would gain a `parse_string_or_list(value)` helper.
 //
 // TODO(cc): validate `name` at param-time with a filesystem-safe regex
 // (`^[a-z0-9][a-z0-9._-]*$`). `name` is interpolated into `/etc/apt/keyrings/`
 // and `/etc/apt/sources.list.d/`, so a path-traversing value would let a plan
 // author write outside those directories.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct AptRepoParams {
     /// Filesystem-safe stem reused as the basename of the sources file
     /// (`<name>.sources`) and keyring (`<name>.asc`).
@@ -49,6 +47,31 @@ pub struct AptRepoParams {
     pub architectures: Option<Vec<String>>,
 
     pub enabled: Option<bool>,
+}
+
+impl ParseParams for AptRepoParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let name = fields.required_string("name")?;
+        let uris = fields.required_string_list("uris")?;
+        let suites = fields.required_string_list("suites")?;
+        let components = fields.required_string_list("components")?;
+        let key_url = fields.required_string("key_url")?;
+        let types = fields.optional_string_list("types")?;
+        let architectures = fields.optional_string_list("architectures")?;
+        let enabled = fields.optional_bool("enabled")?;
+        fields.finish()?;
+        Ok(AptRepoParams {
+            name,
+            uris,
+            suites,
+            components,
+            key_url,
+            types,
+            architectures,
+            enabled,
+        })
+    }
 }
 
 impl Display for AptRepoParams {
@@ -158,34 +181,6 @@ pub struct AptRepo;
 #[async_trait]
 impl ResourceType for AptRepo {
     const ID: &'static str = "apt-repo";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |typ, required: bool| {
-            let mut param = ParamField::new(typ);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-        let string_list = || ParamType::List {
-            item: Box::new(Spanned::new(ParamType::String, span.clone())),
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Struct(indexmap! {
-                "name".to_string() => field(ParamType::String, true),
-                "uris".to_string() => field(string_list(), true),
-                "suites".to_string() => field(string_list(), true),
-                "components".to_string() => field(string_list(), true),
-                "key_url".to_string() => field(ParamType::String, true),
-                "types".to_string() => field(string_list(), false),
-                "architectures".to_string() => field(string_list(), false),
-                "enabled".to_string() => field(ParamType::Boolean, false),
-            }),
-            span,
-        ))
-    }
 
     type Params = AptRepoParams;
     type Resource = AptRepoResource;

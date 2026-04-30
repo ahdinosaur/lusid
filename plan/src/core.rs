@@ -2,7 +2,7 @@
 //! `@core/<id>` namespace (e.g. `@core/apt`, `@core/file`). This module routes a plan
 //! item's module string to the matching [`ResourceType`] impl.
 
-use lusid_params::{ParamValues, validate};
+use lusid_params::ParseParams;
 use lusid_resource::{
     ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command,
     directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, podman::Podman,
@@ -18,8 +18,8 @@ pub fn is_core_module(module: &Spanned<String>) -> Option<&str> {
     module.inner().strip_prefix("@core/")
 }
 
-/// Validate & deserialise `params` against the matching core module's schema, returning
-/// the wrapped [`ResourceParams`] variant. Errors if `id` is unknown.
+/// Parse `params` directly into the matching core module's typed [`ResourceParams`]
+/// variant. Errors if `id` is unknown or the params don't fit the resource's shape.
 pub fn core_module(
     core_module_id: &str,
     params: Option<Spanned<Value>>,
@@ -49,14 +49,5 @@ fn core_module_for_resource<R: ResourceType>(
     params_value: Option<Spanned<Value>>,
 ) -> Result<R::Params, PlanItemToResourceError> {
     let params_value = params_value.ok_or(PlanItemToResourceError::MissingParams)?;
-    let param_types = R::param_types();
-
-    let params_struct = validate(param_types.as_ref(), Some(&params_value))?;
-    let params_struct = params_struct.expect("params struct should exist for core module");
-
-    let param_values = ParamValues::from_rimu_spanned(params_value, params_struct)
-        .map_err(PlanItemToResourceError::ParamsValueFromRimu)?;
-
-    let params: R::Params = param_values.into_inner().into_type()?;
-    Ok(params)
+    R::Params::parse_params(params_value).map_err(PlanItemToResourceError::Parse)
 }

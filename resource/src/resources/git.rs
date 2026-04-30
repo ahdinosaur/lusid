@@ -1,7 +1,6 @@
 use std::{fmt::Display, path::PathBuf};
 
 use async_trait::async_trait;
-use indexmap::indexmap;
 use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
@@ -10,21 +9,39 @@ use lusid_operation::{
     Operation,
     operations::{file::FilePath, git::GitOperation},
 };
-use lusid_params::{ParamField, ParamType, ParamTypes};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{SourceId, Span, Spanned};
-use serde::Deserialize;
+use rimu::{Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GitParams {
     pub repo: String,
     pub path: FilePath,
     pub version: Option<String>,
     pub update: Option<bool>,
     pub force: Option<bool>,
+}
+
+impl ParseParams for GitParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+        let mut fields = StructFields::new(value)?;
+        let repo = fields.required_string("repo")?;
+        let path = FilePath::new(fields.required_target_path("path")?);
+        let version = fields.optional_string("version")?;
+        let update = fields.optional_bool("update")?;
+        let force = fields.optional_bool("force")?;
+        fields.finish()?;
+        Ok(GitParams {
+            repo,
+            path,
+            version,
+            update,
+            force,
+        })
+    }
 }
 
 impl Display for GitParams {
@@ -161,28 +178,6 @@ pub struct Git;
 #[async_trait]
 impl ResourceType for Git {
     const ID: &'static str = "git";
-
-    fn param_types() -> Option<Spanned<ParamTypes>> {
-        let span = Span::new(SourceId::empty(), 0, 0);
-        let field = |typ, required: bool| {
-            let mut param = ParamField::new(typ);
-            if !required {
-                param = param.with_optional();
-            }
-            Spanned::new(param, span.clone())
-        };
-
-        Some(Spanned::new(
-            ParamTypes::Struct(indexmap! {
-                "repo".to_string() => field(ParamType::String, true),
-                "path".to_string() => field(ParamType::TargetPath, true),
-                "version".to_string() => field(ParamType::String, false),
-                "update".to_string() => field(ParamType::Boolean, false),
-                "force".to_string() => field(ParamType::Boolean, false),
-            }),
-            span,
-        ))
-    }
 
     type Params = GitParams;
     type Resource = GitResource;
