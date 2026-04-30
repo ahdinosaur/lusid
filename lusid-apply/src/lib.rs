@@ -169,11 +169,11 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
         }
     };
 
-    // Fallback origin for resolving relative `host-path` strings that arrive
-    // without a real source span — i.e. CLI-supplied `--params`. Anchoring on
-    // the project root means a `--params '{"src": "./foo"}'` invocation
-    // resolves "./foo" relative to the directory the user thinks of as their
-    // project root, not the CWD lusid-apply happens to run from.
+    // Fallback root path for resolving relative `host-path` strings that
+    // arrive without a real source span — i.e. CLI-supplied `--params`.
+    // Anchoring on the project root means a `--params '{"src": "./foo"}'`
+    // invocation resolves "./foo" relative to the directory the user thinks of
+    // as their project root, not the CWD lusid-apply happens to run from.
     let params_ctx = ParamsContext::new(root_path.clone());
 
     // Parse/evaluate to tree of resource params.

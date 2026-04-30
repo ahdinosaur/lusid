@@ -14,8 +14,7 @@
 //! also accept plain [`Value::String`]s for plans that pre-date typed paths:
 //!
 //! - [`parse_host_path`] resolves a relative string against the source
-//!   span's parent directory (matching the historical behaviour of
-//!   `ParamValue::HostPath`); see its docstring for the absolute-vs-relative
+//!   span's parent directory; see its docstring for the absolute-vs-relative
 //!   caveat.
 //! - [`parse_target_path`] requires absolute strings.
 //!

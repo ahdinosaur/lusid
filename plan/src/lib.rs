@@ -70,12 +70,12 @@ pub enum PlanError {
 /// Wraps the recursive subplan in a root [`PlanTree::Branch`] with default metadata so
 /// callers always get a tree (never a bare list).
 ///
-/// `ctx` carries the fallback origin used to resolve relative `host-path`
+/// `ctx` carries the fallback root path used to resolve relative `host-path`
 /// strings — typically the project root. The same `ctx` is shared across the
 /// whole plan tree: each plan's `validate` rewrites string-shaped paths into
 /// the typed Rimu variants before forwarding, so a sub-plan only ever sees a
 /// `Value::String` for a `host-path` field if a literal one was written
-/// in-source (in which case the literal's span source picks the origin
+/// in-source (in which case the literal's span source anchors the resolution
 /// directly, not `ctx`).
 #[tracing::instrument(skip_all)]
 pub async fn plan(

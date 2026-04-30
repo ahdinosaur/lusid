@@ -759,7 +759,7 @@ mod tests {
     }
 
     #[test]
-    fn coerces_relative_string_using_ctx_origin_for_empty_source() {
+    fn coerces_relative_string_using_ctx_root_path_for_empty_source() {
         let schema = struct_schema(vec![("path", ParamType::HostPath, false)]);
         let value = obj(vec![("path", Value::String("bar".into()))], empty_span());
         let coerced = validate(Some(&schema), Some(value), &ctx())
