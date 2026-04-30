@@ -2606,7 +2606,6 @@ dependencies = [
  "indexmap",
  "rimu",
  "rimu-interop",
- "rust_decimal",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -3682,6 +3681,7 @@ dependencies = [
 [[package]]
 name = "rimu"
 version = "0.2.0"
+source = "git+https://github.com/ahdinosaur/rimu#311141dc1f23004cb0e2a6ace388b323bbe46c4f"
 dependencies = [
  "rimu-ast",
  "rimu-eval",
@@ -3694,6 +3694,7 @@ dependencies = [
 [[package]]
 name = "rimu-ast"
 version = "0.2.0"
+source = "git+https://github.com/ahdinosaur/rimu#311141dc1f23004cb0e2a6ace388b323bbe46c4f"
 dependencies = [
  "indexmap",
  "rimu-meta",
@@ -3703,6 +3704,7 @@ dependencies = [
 [[package]]
 name = "rimu-eval"
 version = "0.2.0"
+source = "git+https://github.com/ahdinosaur/rimu#311141dc1f23004cb0e2a6ace388b323bbe46c4f"
 dependencies = [
  "indexmap",
  "rimu-ast",
@@ -3726,6 +3728,7 @@ dependencies = [
 [[package]]
 name = "rimu-meta"
 version = "0.2.0"
+source = "git+https://github.com/ahdinosaur/rimu#311141dc1f23004cb0e2a6ace388b323bbe46c4f"
 dependencies = [
  "ariadne",
  "chumsky",
@@ -3736,6 +3739,7 @@ dependencies = [
 [[package]]
 name = "rimu-parse"
 version = "0.2.0"
+source = "git+https://github.com/ahdinosaur/rimu#311141dc1f23004cb0e2a6ace388b323bbe46c4f"
 dependencies = [
  "chumsky",
  "indexmap",
@@ -3749,6 +3753,7 @@ dependencies = [
 [[package]]
 name = "rimu-stdlib"
 version = "0.2.0"
+source = "git+https://github.com/ahdinosaur/rimu#311141dc1f23004cb0e2a6ace388b323bbe46c4f"
 dependencies = [
  "rimu-eval",
  "rimu-meta",
@@ -3761,6 +3766,7 @@ dependencies = [
 [[package]]
 name = "rimu-value"
 version = "0.2.0"
+source = "git+https://github.com/ahdinosaur/rimu#311141dc1f23004cb0e2a6ace388b323bbe46c4f"
 dependencies = [
  "indexmap",
  "rimu-ast",

@@ -41,7 +41,6 @@ use std::path::{Path, PathBuf};
 use displaydoc::Display;
 use indexmap::IndexMap;
 use rimu::{Number, Span, Spanned, Value};
-use rust_decimal::prelude::ToPrimitive;
 use thiserror::Error;
 
 /// Failures while parsing a Rimu value into a typed Rust value.

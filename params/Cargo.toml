@@ -8,10 +8,6 @@ rimu-interop = { path = "../rimu-interop", version = "0.1" }
 displaydoc.workspace = true
 indexmap.workspace = true
 rimu.workspace = true
-# TODO(cc): `rust_decimal` is only here to bring `ToPrimitive` into scope for
-# `rimu::Number::to_u32()` (Number derefs to `Decimal`). Drop this dep if/when
-# rimu either re-exports `ToPrimitive` or grows a direct `Number::to_u32`.
-rust_decimal = { version = "1.39.0", default-features = false }
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
