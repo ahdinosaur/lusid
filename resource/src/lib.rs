@@ -557,8 +557,7 @@ impl Resource {
 /// expected type.
 ///
 /// We catch typos and stale paths here rather than letting them surface as
-/// confusing apply-time symlink/copy failures (which would only fire in the
-/// matching apply mode and obscure the real problem).
+/// confusing apply-time symlink/copy failures.
 #[derive(Debug, Error)]
 pub enum HostPathValidationError {
     #[error("source host-path {path:?} for @core/file resource was not found")]
@@ -581,9 +580,10 @@ impl ResourceParams {
     /// Validate that any `host-path` source referenced by this params variant
     /// exists on the operator's filesystem with the expected type.
     ///
-    /// `@core/file state: "sourced"` requires `source` to be a regular file
-    /// (or a symlink that resolves to one). `@core/directory state: "sourced"`
-    /// requires `source` to be a directory. All other variants are no-ops.
+    /// `@core/file` `state: "sourced"` and `state: "linked"` both require
+    /// `source` to be a regular file (or a symlink that resolves to one).
+    /// `@core/directory` `state: "sourced"` and `state: "linked"` both
+    /// require `source` to be a directory. All other variants are no-ops.
     ///
     /// Source paths arrive here already resolved to absolute `PathBuf`s (see
     /// `params::ParamType::HostPath` coercion). The probe follows a single
@@ -594,15 +594,17 @@ impl ResourceParams {
     /// TODO(cc): the source `PathBuf` here is resolved but its original
     /// `Spanned<...>` from `parse_host_path` is gone — errors don't point at
     /// the offending `.lusid` line. Either thread `Spanned<FilePath>` through
-    /// `FileParams::Sourced` and `DirectoryParams::Sourced`, or move this
-    /// validation back into `parse_params` so it runs while spans are still
-    /// in hand. AGENTS.md "spans are load-bearing" applies.
+    /// the `Sourced`/`Linked` variants, or move this validation back into
+    /// `parse_params` so it runs while spans are still in hand. AGENTS.md
+    /// "spans are load-bearing" applies.
     pub async fn validate_host_paths(&self) -> Result<(), HostPathValidationError> {
         match self {
-            ResourceParams::File(FileParams::Sourced { source, .. }) => {
+            ResourceParams::File(FileParams::Sourced { source, .. })
+            | ResourceParams::File(FileParams::Linked { source, .. }) => {
                 check_source_is_file(source).await
             }
-            ResourceParams::Directory(DirectoryParams::Sourced { source, .. }) => {
+            ResourceParams::Directory(DirectoryParams::Sourced { source, .. })
+            | ResourceParams::Directory(DirectoryParams::Linked { source, .. }) => {
                 check_source_is_directory(source).await
             }
             _ => Ok(()),
@@ -721,6 +723,20 @@ mod tests {
         })
     }
 
+    fn file_linked(source: FilePath) -> ResourceParams {
+        ResourceParams::File(FileParams::Linked {
+            source,
+            path: FilePath::new("/tmp/lusid-validate-test-target"),
+        })
+    }
+
+    fn directory_linked(source: FilePath) -> ResourceParams {
+        ResourceParams::Directory(DirectoryParams::Linked {
+            source,
+            path: FilePath::new("/tmp/lusid-validate-test-target"),
+        })
+    }
+
     #[tokio::test]
     async fn file_sourced_validates_when_source_is_a_file() {
         let dir = tempdir().unwrap();
@@ -807,6 +823,88 @@ mod tests {
         let source = dir.path().join("src.txt");
         tokio::fs::write(&source, b"x").await.unwrap();
         let err = directory_sourced(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::DirectorySourceNotDirectory { .. }
+        ));
+    }
+
+    // --- `state: "linked"` reuses the same file/directory checks ---------
+
+    #[tokio::test]
+    async fn file_linked_validates_when_source_is_a_file() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        file_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .expect("file source should validate");
+    }
+
+    #[tokio::test]
+    async fn file_linked_errors_when_source_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("missing.txt");
+        let err = file_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceMissing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_linked_errors_when_source_is_a_directory() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("a-dir");
+        tokio::fs::create_dir(&source).await.unwrap();
+        let err = file_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceNotFile { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_linked_validates_when_source_is_a_directory() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src");
+        tokio::fs::create_dir(&source).await.unwrap();
+        directory_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .expect("directory source should validate");
+    }
+
+    #[tokio::test]
+    async fn directory_linked_errors_when_source_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("missing");
+        let err = directory_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::DirectorySourceMissing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_linked_errors_when_source_is_a_file() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let err = directory_linked(file_path(&source))
             .validate_host_paths()
             .await
             .unwrap_err();

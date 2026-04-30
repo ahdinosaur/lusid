@@ -36,7 +36,7 @@ use std::sync::LazyLock;
 
 use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{CausalityTree, EpochError, compute_epochs};
-use lusid_ctx::{ApplyMode, Context, ContextError};
+use lusid_ctx::{Context, ContextError};
 use lusid_operation::{Operation, OperationApplyError};
 use lusid_params::ParamsContext;
 use lusid_plan::{
@@ -143,11 +143,6 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     } = options;
 
     let mut ctx = Context::create(&root_path)?;
-    ctx.set_apply_mode(if guest_mode {
-        ApplyMode::Guest
-    } else {
-        ApplyMode::Local
-    });
     let mut store = Store::new(ctx.paths().cache_dir());
     let system = System::get().await?;
 

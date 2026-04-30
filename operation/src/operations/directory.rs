@@ -16,20 +16,19 @@ pub enum DirectoryOperation {
     },
 
     /// Atomically create (or replace) a symlink at `path` targeting `source`.
-    /// Used by `@core/directory state: "sourced"` in
-    /// [`ApplyMode::Local`](lusid_ctx::ApplyMode::Local). Implemented via the
-    /// same `fs::create_symlink_atomic` primitive as the file equivalent —
-    /// kept in this enum so the streaming TUI message reads `Directory::*`
-    /// for a directory resource, rather than `File::Write`.
+    /// Emitted by `@core/directory state: "linked"`. Implemented via the same
+    /// `fs::create_symlink_atomic` primitive as the file equivalent — kept in
+    /// this enum so the streaming TUI message reads `Directory::*` for a
+    /// directory resource, rather than `File::Write`.
     CreateSymlink {
         source: FilePath,
         path: FilePath,
     },
 
-    /// Recursively copy `source` into `path`. Used by
-    /// `@core/directory state: "sourced"` in
-    /// [`ApplyMode::Guest`](lusid_ctx::ApplyMode::Guest), where `source` has
-    /// been pre-staged onto the same host as the apply binary.
+    /// Recursively copy `source` into `path`. Emitted by
+    /// `@core/directory state: "sourced"`; `source` is a host-path that must
+    /// be reachable from the apply binary (already true on local apply, and
+    /// pre-staged onto the same host for dev/remote apply).
     CopyTree {
         source: FilePath,
         path: FilePath,

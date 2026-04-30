@@ -1,12 +1,9 @@
 log = "info"
 
-# A dotfiles-style plan that links a small set of config files and one config
-# directory into the operator's `$HOME`. Designed for `lusid local apply` —
-# under local apply, sourced files become symlinks pointing back at the source
-# in this repo, so editing `./files/zshrc` here takes effect immediately.
-# Under `dev apply`/`remote apply` the same plan would copy the bytes onto the
-# target machine instead, since the operator's filesystem isn't reachable
-# from there.
+# A dotfiles-style plan that symlinks a small set of config files and one
+# config directory into the operator's `$HOME` via `state: "linked"`. Edits
+# to the sources in this repo propagate to the link targets immediately —
+# the dotfiles ergonomic.
 
 [machines.localhost]
 hostname = "localhost"

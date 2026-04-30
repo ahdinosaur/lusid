@@ -63,20 +63,18 @@ In `params`:
 
 If you add new path-like types, follow this pattern and be explicit about absolute/relative requirements.
 
-### `state: "sourced"` is apply-mode-dependent
+### `state: "sourced"` vs `state: "linked"`
 
-`@core/file state: "sourced"` and `@core/directory state: "sourced"` materialise differently based on `ctx.apply_mode()`:
+`@core/file` and `@core/directory` both expose two ways to materialise a host-path source on the target:
 
-- `ApplyMode::Local` (operator's machine): `path` becomes a symlink at `path` pointing to `source`. Edits to `source` propagate without a re-apply. This is the dotfiles ergonomic.
-- `ApplyMode::Guest` (dev/remote VM): `path` is a byte copy / recursive `cp -r`. The operator's filesystem isn't reachable, so the bytes have to live on the target.
+- **`state: "sourced"`** — byte-copy of the file, or recursive `cp -r` of the directory tree, into `path`. Accepts optional `mode`/`user`/`group`. Edits to `source` only propagate on the next apply. Use this when the bytes need to live on the target independently of the operator's filesystem (system configs, deployed artifacts, dev/remote apply).
+- **`state: "linked"`** — atomic symlink at `path` pointing to `source`. Refuses `mode`/`user`/`group` at the parser level (Linux symlinks have no meaningful mode of their own, and chmod/chown via the link silently mutates the target file in the operator's repo — declined). Edits to `source` show up at `path` immediately. Use this for dotfiles-style ergonomics.
 
-The mode flows through `Context` and is consulted only in the resource state probes; `change()` and `operations()` stay pure and dispatch on the resulting `FileState::NotSourcedAsCopy` / `NotSourcedAsSymlink` (and the directory equivalents).
+Both states validate at plan-load time (post-`plan()`, pre-resources expansion) that `source` exists and has the expected type — regular file for `@core/file`, directory for `@core/directory`. See `ResourceParams::validate_host_paths` in `resource/src/lib.rs`.
 
-`fs::change_mode` and `fs::change_owner` (and the `Mode`/`User`/`Group` *probes* via `fs::get_mode` / `fs::get_owner_user` / `fs::get_owner_group`) all follow symlinks on Linux. So for a sourced file in local mode, `mode`/`user`/`group` are read from and written to the **source** file (the one in your config repo) — both the probe and the apply transparently traverse the symlink. For dotfiles where you own the source, this is benign and idempotent.
-
-Footgun: if you `sudo lusid local apply` a plan that declares e.g. `state: "sourced", source: "./etc/nginx.conf", path: "/etc/nginx/nginx.conf", user: "root"`, lusid will (1) symlink `/etc/nginx/nginx.conf` to your repo file and (2) chown your repo file to root via the symlink. Your config repo now has a root-owned file you can't edit without sudo. Don't use `user`/`group` on a sourced resource in a system-config plan you intend to apply with elevated privileges. The `mode` field has the same footgun for the source file's mode bits. The state probe is symmetric: a re-apply won't notice the now-rooted source as drift, because the probe is also reading through the symlink.
-
-The guest-mode state probe for a sourced **directory** is intentionally weak: existence-as-directory at `path` is treated as `Sourced` (no recursive content diff). To force a re-copy after the source changes, declare `state: "absent"` and re-apply.
+Implementation notes:
+- The Linked state probe is *lexical*: `readlink(2)` against the source string. We deliberately don't canonicalise; otherwise drift between a plan declaring `./foo` and an existing link declaring something else is invisible.
+- The Sourced directory state probe is intentionally weak (`path` exists as a directory ⇒ `Sourced`). Content drift in `source` after first apply is not detected; declare `state: "absent"` and re-apply to force a refresh. A content-aware recursive diff is a future direction (cf. Salt's `file.recurse`).
 
 ### Causality IDs must be unique
 `compute_epochs` fails on duplicate IDs across leaves/branches. Any new code generating ids should avoid collisions (or scope them like `map_plan_subitems()` does by minting a `scope_id`).

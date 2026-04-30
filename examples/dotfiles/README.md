@@ -1,6 +1,6 @@
 # lusid dotfiles example
 
-A minimal dotfiles-style setup demonstrating `state: "sourced"` for
+A minimal dotfiles-style setup demonstrating `state: "linked"` for
 `@core/file` and `@core/directory`.
 
 ## What it does
@@ -13,21 +13,18 @@ Run `lusid local apply` and the plan creates two symlinks under `$HOME`:
 Edits to the source files in this repo show up immediately at the symlink
 targets — no re-apply needed.
 
-## How `sourced` behaves across apply modes
+## `sourced` vs `linked`
 
-Lusid materialises `state: "sourced"` differently depending on where the apply
-binary is running:
+`@core/file` and `@core/directory` both offer two ways to materialise a
+host-path source on the target:
 
-| Apply mode | `@core/file state: "sourced"` | `@core/directory state: "sourced"` |
+| State | What it does | Use when |
 | --- | --- | --- |
-| `local apply` | symlink at `path` → host `source` | symlink at `path` → host `source` |
-| `dev apply` / `remote apply` | atomic byte copy of `source` to `path` | recursive `cp -r` of `source` to `path` |
+| `state: "sourced"` | Copies the bytes (file) or recursively copies the tree (directory) into `path`. Accepts `mode`/`user`/`group`. | The bytes need to live independently on the target — e.g. system configs, deployable artifacts, or anything you'd run via `dev apply`/`remote apply` where the operator's filesystem isn't reachable from the target. |
+| `state: "linked"` | Materialises `path` as a symlink to `source`. No `mode`/`user`/`group`. | You're editing config files in place and want changes to take effect without re-running apply — the dotfiles ergonomic this example uses. |
 
-Local apply assumes the operator is editing files they want to keep editing,
-and symlinks let those edits propagate. Dev/remote apply assumes the operator's
-machine isn't reachable from the target, so the bytes have to live on the
-target — `lusid` SFTPs the plan + sources during the dev/remote flow before
-running apply.
+Both forms validate at plan-load time that `source` exists and has the
+expected type (regular file for `@core/file`, directory for `@core/directory`).
 
 ## Running
 

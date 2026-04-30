@@ -1,35 +1,35 @@
 name: "dotfiles"
 version: "0.1.0"
 
-# A small dotfiles plan: link a single config file and a config directory into
-# the operator's $HOME. Mirrors the Salt `file.symlink` pattern this project's
-# author was running before lusid (see ~/.config/dinofarm), but ergonomic for
-# `lusid local apply` thanks to mode-aware `state: "sourced"`.
+# A small dotfiles plan: symlink a single config file and a config directory
+# into the operator's $HOME. Mirrors the Salt `file.symlink` pattern this
+# project's author was running before lusid (see ~/.config/dinofarm).
+#
+# `state: "linked"` is the dotfiles-friendly choice: the symlink at `path`
+# points back at `source` in this repo, so edits to the source show up
+# immediately at the link target — no re-apply needed. Use `state: "sourced"`
+# instead for files whose bytes need to live independently on the target
+# (deployable artifacts, system configs, anything reachable over dev/remote
+# apply where the operator's filesystem isn't accessible).
 
 params:
   home:
     type: "target-path"
 
 setup: (params) =>
-  # Link a single config file. In `local apply` this becomes a symlink at
-  # `<home>/.zshrc` pointing at `./files/zshrc`; edits to the source show up
-  # immediately at the link target.
-  #
-  # `<home>` itself is assumed to already exist — only nested dirs like
+  # Symlink a single config file. `<home>/.zshrc` will point at this repo's
+  # `./files/zshrc` — edits to the source propagate to the link target
+  # immediately. `<home>` itself is assumed to exist; only nested dirs like
   # `<home>/.config` need explicit `state: "present"` declarations below.
   - module: "@core/file"
     id: "zshrc"
     params:
-      state: "sourced"
+      state: "linked"
       source: "./files/zshrc"
       path: params.home + "/.zshrc"
 
-  # Link an entire config directory. Same deal: `<home>/.config/helix` becomes
-  # a symlink to `./files/helix` in `local apply`, or a recursive copy in
-  # `dev apply`/`remote apply`.
-  #
-  # The `<home>/.config` directory has to exist before the symlink is created,
-  # so we declare it explicitly with `state: "present"`.
+  # Symlink an entire config directory. The `<home>/.config` parent has to
+  # exist before the symlink is created, so we declare it explicitly.
   - module: "@core/directory"
     id: "config-dir"
     params:
@@ -41,6 +41,6 @@ setup: (params) =>
     requires:
       - "config-dir"
     params:
-      state: "sourced"
+      state: "linked"
       source: "./files/helix"
       path: params.home + "/.config/helix"

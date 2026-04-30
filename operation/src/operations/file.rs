@@ -42,12 +42,6 @@ pub enum FileSource {
     /// [`Context::secrets`] at apply time so plaintext never lives in the
     /// resource/change/operation tree.
     Secret(String),
-
-    /// Make `path` a symlink pointing at this host path. Used by
-    /// `@core/file state: "sourced"` (and `@core/directory state: "sourced"`)
-    /// when running in [`ApplyMode::Local`](lusid_ctx::ApplyMode::Local) so
-    /// edits to the source propagate without a re-apply.
-    Symlink(FilePath),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -132,6 +126,12 @@ pub enum FileOperation {
         path: FilePath,
         source: FileSource,
     },
+    /// Atomically create (or replace) a symlink at `path` targeting `source`.
+    /// Emitted by `@core/file state: "linked"`.
+    CreateSymlink {
+        source: FilePath,
+        path: FilePath,
+    },
     Remove {
         path: FilePath,
     },
@@ -164,12 +164,12 @@ impl Display for FileOperation {
                 FileSource::Secret(name) => {
                     write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
                 }
-                FileSource::Symlink(source_path) => write!(
-                    f,
-                    "File::Write(path = {}, source = Symlink({}))",
-                    path, source_path
-                ),
             },
+            FileOperation::CreateSymlink { source, path } => write!(
+                f,
+                "File::CreateSymlink(source = {}, path = {})",
+                source, path
+            ),
             FileOperation::Remove { path } => write!(f, "File::Remove(path = {})", path),
             FileOperation::ChangeMode { path, mode } => {
                 write!(f, "File::ChangeMode(path = {}, mode = {})", path, mode)
@@ -191,14 +191,12 @@ impl_display_render!(FileOperation);
 ///
 /// - `Bytes` covers both inline contents and decrypted-secret plaintext.
 /// - `Copy` covers a path-sourced copy.
-/// - `Symlink` covers an atomic symlink replacement.
 ///
 /// Resolved up-front so the inner async block doesn't borrow `ctx` (and so
 /// secret plaintext lives only as long as the `Vec<u8>` it's copied into).
 enum WriteSource {
     Bytes(Vec<u8>),
     Copy(FilePath),
-    Symlink(FilePath),
 }
 
 #[derive(Debug, Clone)]
@@ -244,10 +242,6 @@ impl OperationType for File {
                             .ok_or_else(|| FileApplyError::MissingSecret { name: name.clone() })?;
                         WriteSource::Bytes(secret.expose_secret().as_bytes().to_vec())
                     }
-                    FileSource::Symlink(source) => {
-                        info!("[file] create symlink: {} -> {}", path, source);
-                        WriteSource::Symlink(source)
-                    }
                 };
                 Ok((
                     Box::pin(async move {
@@ -258,10 +252,18 @@ impl OperationType for File {
                             WriteSource::Copy(source) => {
                                 fs::copy_file_atomic(source.as_path(), path.as_path()).await?
                             }
-                            WriteSource::Symlink(source) => {
-                                fs::create_symlink_atomic(source.as_path(), path.as_path()).await?
-                            }
                         }
+                        Ok(())
+                    }),
+                    stdout,
+                    stderr,
+                ))
+            }
+            FileOperation::CreateSymlink { source, path } => {
+                info!("[file] create symlink: {} -> {}", path, source);
+                Ok((
+                    Box::pin(async move {
+                        fs::create_symlink_atomic(source.as_path(), path.as_path()).await?;
                         Ok(())
                     }),
                     stdout,
