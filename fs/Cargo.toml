@@ -8,3 +8,6 @@ filetime = "0.2.26"
 nix.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

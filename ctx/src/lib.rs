@@ -24,14 +24,31 @@ pub enum ContextError {
     Http(#[from] HttpError),
 }
 
+/// Where `lusid-apply` is running relative to the operator.
+///
+/// `Local` is the default: the apply binary runs on the operator's own host,
+/// so `host-path` sources point at files the operator just authored — making
+/// them ergonomically symlinkable.
+///
+/// `Guest` flips on for `dev`/`remote` apply, where the host has SFTPed the
+/// plan + sources to a target machine and runs the apply binary there. The
+/// operator's filesystem isn't reachable, so anything path-sourced has to be
+/// copied (the bytes already live on this machine, alongside the plan).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApplyMode {
+    Local,
+    Guest,
+}
+
 /// Runtime context for a lusid invocation — plan root, XDG paths, HTTP client,
-/// decrypted secrets bundle.
+/// decrypted secrets bundle, and apply mode (local vs guest).
 #[derive(Debug, Clone)]
 pub struct Context {
     root: PathBuf,
     paths: Paths,
     http: HttpClient,
     secrets: Secrets,
+    apply_mode: ApplyMode,
 }
 
 impl Context {
@@ -43,6 +60,7 @@ impl Context {
             paths,
             http,
             secrets: Secrets::empty(),
+            apply_mode: ApplyMode::Local,
         })
     }
 
@@ -64,5 +82,13 @@ impl Context {
 
     pub fn set_secrets(&mut self, secrets: Secrets) {
         self.secrets = secrets;
+    }
+
+    pub fn apply_mode(&self) -> ApplyMode {
+        self.apply_mode
+    }
+
+    pub fn set_apply_mode(&mut self, mode: ApplyMode) {
+        self.apply_mode = mode;
     }
 }

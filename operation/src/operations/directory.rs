@@ -14,6 +14,27 @@ pub enum DirectoryOperation {
     Create {
         path: FilePath,
     },
+
+    /// Atomically create (or replace) a symlink at `path` targeting `source`.
+    /// Used by `@core/directory state: "sourced"` in
+    /// [`ApplyMode::Local`](lusid_ctx::ApplyMode::Local). Implemented via the
+    /// same `fs::create_symlink_atomic` primitive as the file equivalent —
+    /// kept in this enum so the streaming TUI message reads `Directory::*`
+    /// for a directory resource, rather than `File::Write`.
+    CreateSymlink {
+        source: FilePath,
+        path: FilePath,
+    },
+
+    /// Recursively copy `source` into `path`. Used by
+    /// `@core/directory state: "sourced"` in
+    /// [`ApplyMode::Guest`](lusid_ctx::ApplyMode::Guest), where `source` has
+    /// been pre-staged onto the same host as the apply binary.
+    CopyTree {
+        source: FilePath,
+        path: FilePath,
+    },
+
     Remove {
         path: FilePath,
     },
@@ -33,6 +54,15 @@ impl Display for DirectoryOperation {
         match self {
             DirectoryOperation::Create { path } => {
                 write!(f, "Directory::Create(path = {path})")
+            }
+            DirectoryOperation::CreateSymlink { source, path } => {
+                write!(
+                    f,
+                    "Directory::CreateSymlink(source = {source}, path = {path})"
+                )
+            }
+            DirectoryOperation::CopyTree { source, path } => {
+                write!(f, "Directory::CopyTree(source = {source}, path = {path})")
             }
             DirectoryOperation::Remove { path } => {
                 write!(f, "Directory::Remove(path = {path})")
@@ -81,6 +111,24 @@ impl OperationType for Directory {
                 info!("[directory] create: {}", path);
                 Ok((
                     Box::pin(async move { fs::create_dir(path.as_path()).await }),
+                    stdout,
+                    stderr,
+                ))
+            }
+            DirectoryOperation::CreateSymlink { source, path } => {
+                info!("[directory] create symlink: {} -> {}", path, source);
+                Ok((
+                    Box::pin(async move {
+                        fs::create_symlink_atomic(source.as_path(), path.as_path()).await
+                    }),
+                    stdout,
+                    stderr,
+                ))
+            }
+            DirectoryOperation::CopyTree { source, path } => {
+                info!("[directory] copy tree: {} -> {}", source, path);
+                Ok((
+                    Box::pin(async move { fs::copy_dir(source.as_path(), path.as_path()).await }),
                     stdout,
                     stderr,
                 ))

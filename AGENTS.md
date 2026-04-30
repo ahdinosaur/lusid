@@ -63,6 +63,21 @@ In `params`:
 
 If you add new path-like types, follow this pattern and be explicit about absolute/relative requirements.
 
+### `state: "sourced"` is apply-mode-dependent
+
+`@core/file state: "sourced"` and `@core/directory state: "sourced"` materialise differently based on `ctx.apply_mode()`:
+
+- `ApplyMode::Local` (operator's machine): `path` becomes a symlink at `path` pointing to `source`. Edits to `source` propagate without a re-apply. This is the dotfiles ergonomic.
+- `ApplyMode::Guest` (dev/remote VM): `path` is a byte copy / recursive `cp -r`. The operator's filesystem isn't reachable, so the bytes have to live on the target.
+
+The mode flows through `Context` and is consulted only in the resource state probes; `change()` and `operations()` stay pure and dispatch on the resulting `FileState::NotSourcedAsCopy` / `NotSourcedAsSymlink` (and the directory equivalents).
+
+`fs::change_mode` and `fs::change_owner` (and the `Mode`/`User`/`Group` *probes* via `fs::get_mode` / `fs::get_owner_user` / `fs::get_owner_group`) all follow symlinks on Linux. So for a sourced file in local mode, `mode`/`user`/`group` are read from and written to the **source** file (the one in your config repo) — both the probe and the apply transparently traverse the symlink. For dotfiles where you own the source, this is benign and idempotent.
+
+Footgun: if you `sudo lusid local apply` a plan that declares e.g. `state: "sourced", source: "./etc/nginx.conf", path: "/etc/nginx/nginx.conf", user: "root"`, lusid will (1) symlink `/etc/nginx/nginx.conf` to your repo file and (2) chown your repo file to root via the symlink. Your config repo now has a root-owned file you can't edit without sudo. Don't use `user`/`group` on a sourced resource in a system-config plan you intend to apply with elevated privileges. The `mode` field has the same footgun for the source file's mode bits. The state probe is symmetric: a re-apply won't notice the now-rooted source as drift, because the probe is also reading through the symlink.
+
+The guest-mode state probe for a sourced **directory** is intentionally weak: existence-as-directory at `path` is treated as `Sourced` (no recursive content diff). To force a re-copy after the source changes, declare `state: "absent"` and re-apply.
+
 ### Causality IDs must be unique
 `compute_epochs` fails on duplicate IDs across leaves/branches. Any new code generating ids should avoid collisions (or scope them like `map_plan_subitems()` does by minting a `scope_id`).
 

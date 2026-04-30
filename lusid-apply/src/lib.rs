@@ -36,13 +36,13 @@ use std::sync::LazyLock;
 
 use lusid_apply_stdio::AppUpdate;
 use lusid_causality::{CausalityTree, EpochError, compute_epochs};
-use lusid_ctx::{Context, ContextError};
+use lusid_ctx::{ApplyMode, Context, ContextError};
 use lusid_operation::{Operation, OperationApplyError};
 use lusid_params::ParamsContext;
 use lusid_plan::{
     self, PlanError, PlanId, PlanNodeId, PlanTree, map_plan_subitems, plan, render_plan_tree,
 };
-use lusid_resource::{Resource, ResourceState, ResourceStateError};
+use lusid_resource::{HostPathValidationError, Resource, ResourceState, ResourceStateError};
 use lusid_secrets::{LoadError, Redactor, Secrets};
 use lusid_store::Store;
 use lusid_system::{GetSystemError, System};
@@ -121,6 +121,9 @@ pub enum ApplyError {
 
     #[error(transparent)]
     Secrets(#[from] LoadError),
+
+    #[error("host-path validation failed: {0}")]
+    HostPathValidation(#[from] HostPathValidationError),
 }
 
 /// Run the full apply pipeline, streaming [`AppUpdate`]s to stdout as it
@@ -140,6 +143,11 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     } = options;
 
     let mut ctx = Context::create(&root_path)?;
+    ctx.set_apply_mode(if guest_mode {
+        ApplyMode::Guest
+    } else {
+        ApplyMode::Local
+    });
     let mut store = Store::new(ctx.paths().cache_dir());
     let system = System::get().await?;
 
@@ -184,6 +192,17 @@ pub async fn apply(options: ApplyOptions) -> Result<(), ApplyError> {
     })
     .await?;
     let resource_params = FlatTree::from(resource_params);
+
+    // Validate `host-path` sources up front so a typo doesn't surface as a
+    // confusing apply-time symlink/copy failure. Only `@core/file` and
+    // `@core/directory` "sourced" variants currently have a host-path source
+    // to validate; everything else is a no-op. The probes are independent
+    // `lstat`/`stat` calls, so we fan them out — on a network filesystem a
+    // serial walk would multiply round-trips by the leaf count.
+    let validations = resource_params
+        .leaves()
+        .map(|params| params.validate_host_paths());
+    futures_util::future::try_join_all(validations).await?;
 
     // Get tree of atomic resources.
     emit(AppUpdate::ResourcesStart).await?;

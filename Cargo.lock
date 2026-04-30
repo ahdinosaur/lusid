@@ -2488,6 +2488,7 @@ name = "lusid-apply"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "futures-util",
  "lusid-apply-stdio",
  "lusid-causality",
  "lusid-ctx",
@@ -2553,6 +2554,7 @@ version = "0.1.0"
 dependencies = [
  "filetime",
  "nix 0.30.1",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -2651,6 +2653,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

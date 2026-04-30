@@ -2,7 +2,7 @@ use std::fmt::{self, Display};
 
 use async_trait::async_trait;
 use lusid_causality::{CausalityMeta, CausalityTree};
-use lusid_ctx::Context;
+use lusid_ctx::{ApplyMode, Context};
 use lusid_fs::{self as fs, FsError};
 use lusid_operation::{
     Operation,
@@ -141,10 +141,20 @@ impl Display for FileResource {
 
 impl_display_render!(FileResource);
 
+/// Probed state of a [`FileResource`] atom.
+///
+/// `Sourced` is the unified "matches desired" terminal for both
+/// `FileResource::Sourced` and `FileResource::Secret`. The two `NotSourced*`
+/// variants split on the apply-mode-derived intent: in
+/// [`ApplyMode::Local`](lusid_ctx::ApplyMode::Local) we want a symlink at
+/// `path` pointing at `source`; elsewhere we want a byte-for-byte copy. The
+/// state probe encodes that intent so [`File::change`] stays a pure
+/// dispatch.
 #[derive(Debug, Clone)]
 pub enum FileState {
     Sourced,
-    NotSourced,
+    NotSourcedAsCopy,
+    NotSourcedAsSymlink,
     Present,
     Absent,
     ModeCorrect,
@@ -160,7 +170,8 @@ impl Display for FileState {
         use FileState::*;
         let text = match self {
             Sourced => "Sourced",
-            NotSourced => "NotSourced",
+            NotSourcedAsCopy => "NotSourcedAsCopy",
+            NotSourcedAsSymlink => "NotSourcedAsSymlink",
             Present => "Present",
             Absent => "Absent",
             ModeCorrect => "ModeCorrect",
@@ -228,6 +239,11 @@ impl Display for FileChange {
                 FileSource::Secret(name) => {
                     write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
                 }
+                FileSource::Symlink(source_path) => write!(
+                    f,
+                    "File::Write(path = {}, source = Symlink({}))",
+                    path, source_path
+                ),
             },
             FileChange::Remove { path } => write!(f, "File::Remove(path = {path})"),
             FileChange::ChangeMode { path, mode } => {
@@ -357,27 +373,21 @@ impl ResourceType for File {
     ) -> Result<Self::State, Self::StateError> {
         let state = match resource {
             FileResource::Sourced { source, path } => {
-                if !fs::path_exists(path.as_path()).await? {
-                    FileState::NotSourced
-                } else {
-                    let source_contents = fs::read_file_to_bytes(source.as_path()).await?;
-                    let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
-                    if source_contents == path_contents {
-                        FileState::Sourced
-                    } else {
-                        FileState::NotSourced
-                    }
-                }
+                probe_sourced_state(ctx.apply_mode(), source, path).await?
             }
 
             FileResource::Secret { name, path } => {
+                // Secrets always materialise as bytes — the on-disk shape is
+                // a regular file regardless of apply mode (a symlink would
+                // defeat the encrypted-at-rest model). Apply mode is
+                // intentionally ignored here.
                 if !fs::path_exists(path.as_path()).await? {
-                    FileState::NotSourced
+                    FileState::NotSourcedAsCopy
                 } else {
                     // Compare the file's current contents against the
                     // decrypted secret plaintext. A missing secret here
                     // (e.g. typo in the plan's `name` field) surfaces as
-                    // `MissingSecret` rather than a silent NotSourced.
+                    // `MissingSecret` rather than a silent NotSourcedAsCopy.
                     let secret = ctx
                         .secrets()
                         .get(name)
@@ -386,7 +396,7 @@ impl ResourceType for File {
                     if path_contents.as_slice() == secret.expose_secret().as_bytes() {
                         FileState::Sourced
                     } else {
-                        FileState::NotSourced
+                        FileState::NotSourcedAsCopy
                     }
                 }
             }
@@ -449,16 +459,23 @@ impl ResourceType for File {
 
     fn change(resource: &Self::Resource, state: &Self::State) -> Option<Self::Change> {
         match (resource, state) {
-            (FileResource::Sourced { source, path }, FileState::NotSourced) => {
+            (FileResource::Sourced { source, path }, FileState::NotSourcedAsCopy) => {
                 Some(FileChange::Write {
                     path: path.clone(),
                     source: FileSource::Path(source.clone()),
                 })
             }
 
+            (FileResource::Sourced { source, path }, FileState::NotSourcedAsSymlink) => {
+                Some(FileChange::Write {
+                    path: path.clone(),
+                    source: FileSource::Symlink(source.clone()),
+                })
+            }
+
             (FileResource::Sourced { .. }, FileState::Sourced) => None,
 
-            (FileResource::Secret { name, path }, FileState::NotSourced) => {
+            (FileResource::Secret { name, path }, FileState::NotSourcedAsCopy) => {
                 Some(FileChange::Write {
                     path: path.clone(),
                     source: FileSource::Secret(name.clone()),
@@ -534,4 +551,237 @@ impl ResourceType for File {
 
         vec![CausalityTree::leaf(CausalityMeta::default(), op)]
     }
+}
+
+/// Probe `path` for whether it already matches `source` per the apply mode.
+///
+/// In [`ApplyMode::Local`](lusid_ctx::ApplyMode::Local) the desired shape is a
+/// symlink at `path` whose target matches `source` exactly (string-wise; we
+/// don't canonicalise, since that would falsely accept a regular file at
+/// `path` whose contents happen to match).
+///
+/// In [`ApplyMode::Guest`](lusid_ctx::ApplyMode::Guest) the desired shape is
+/// a regular file at `path` with bytes equal to `source`. The probe reads
+/// through any existing symlink — so a previously-symlinked path with
+/// matching bytes reports `Sourced` and stays as a symlink. That's deliberate:
+/// the operator already has the bytes they declared, swapping the on-disk
+/// representation would just be churn.
+async fn probe_sourced_state(
+    mode: ApplyMode,
+    source: &FilePath,
+    path: &FilePath,
+) -> Result<FileState, FileStateError> {
+    match mode {
+        // Note(cc): the symlink-target comparison is *lexical* — `target`
+        // is whatever `readlink(2)` returned, compared as a `PathBuf`
+        // against the source path string. We deliberately don't
+        // canonicalise: `source` arrives as the absolute resolved
+        // host-path (see `params::ParamType::HostPath` coercion), and any
+        // pre-existing symlink that `readlink`s to a different *string*
+        // — even one that resolves to the same inode — should re-create.
+        // Otherwise the operator can never see drift between a plan
+        // declaring `./foo` and an existing link declaring something else.
+        ApplyMode::Local => match fs::probe_symlink(path.as_path()).await? {
+            fs::SymlinkTarget::Symlink(target) if target == source.as_path() => {
+                Ok(FileState::Sourced)
+            }
+            // Wrong-target symlink, regular file, or missing path — all
+            // mean "not the symlink we want here, materialise it".
+            _ => Ok(FileState::NotSourcedAsSymlink),
+        },
+        ApplyMode::Guest => {
+            if !fs::path_exists(path.as_path()).await? {
+                return Ok(FileState::NotSourcedAsCopy);
+            }
+            let source_contents = fs::read_file_to_bytes(source.as_path()).await?;
+            let path_contents = fs::read_file_to_bytes(path.as_path()).await?;
+            if source_contents == path_contents {
+                Ok(FileState::Sourced)
+            } else {
+                Ok(FileState::NotSourcedAsCopy)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn file_path(p: &std::path::Path) -> FilePath {
+        FilePath::new(p.to_string_lossy().into_owned())
+    }
+
+    /// Local mode + the desired symlink already exists pointing at source.
+    #[tokio::test]
+    async fn local_correct_symlink_reports_sourced() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let target = dir.path().join("link.txt");
+        tokio::fs::symlink(&source, &target).await.unwrap();
+
+        let state = probe_sourced_state(ApplyMode::Local, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::Sourced));
+    }
+
+    /// Local mode + path is a regular file with the right bytes — still
+    /// reports NotSourcedAsSymlink because the desired *shape* is a symlink,
+    /// not just matching bytes.
+    #[tokio::test]
+    async fn local_regular_file_reports_not_sourced_as_symlink() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"shared").await.unwrap();
+        let target = dir.path().join("regular.txt");
+        tokio::fs::write(&target, b"shared").await.unwrap();
+
+        let state = probe_sourced_state(ApplyMode::Local, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotSourcedAsSymlink));
+    }
+
+    /// Local mode + the symlink at path points somewhere else.
+    #[tokio::test]
+    async fn local_wrong_symlink_target_reports_not_sourced_as_symlink() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        let other = dir.path().join("other.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        tokio::fs::write(&other, b"y").await.unwrap();
+        let target = dir.path().join("link.txt");
+        tokio::fs::symlink(&other, &target).await.unwrap();
+
+        let state = probe_sourced_state(ApplyMode::Local, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotSourcedAsSymlink));
+    }
+
+    /// Local mode + path doesn't exist.
+    #[tokio::test]
+    async fn local_missing_path_reports_not_sourced_as_symlink() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let target = dir.path().join("link.txt");
+
+        let state = probe_sourced_state(ApplyMode::Local, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotSourcedAsSymlink));
+    }
+
+    /// Guest mode + matching bytes at path.
+    #[tokio::test]
+    async fn guest_matching_bytes_reports_sourced() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"hello").await.unwrap();
+        let target = dir.path().join("dest.txt");
+        tokio::fs::write(&target, b"hello").await.unwrap();
+
+        let state = probe_sourced_state(ApplyMode::Guest, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::Sourced));
+    }
+
+    /// Guest mode + symlink with matching bytes through the link — still
+    /// `Sourced`, because the byte-equality check reads through the symlink.
+    /// We deliberately don't churn the on-disk shape.
+    #[tokio::test]
+    async fn guest_symlink_with_matching_bytes_reports_sourced() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"shared").await.unwrap();
+        let target = dir.path().join("link.txt");
+        tokio::fs::symlink(&source, &target).await.unwrap();
+
+        let state = probe_sourced_state(ApplyMode::Guest, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::Sourced));
+    }
+
+    /// Guest mode + path bytes diverge from source.
+    #[tokio::test]
+    async fn guest_byte_mismatch_reports_not_sourced_as_copy() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        let target = dir.path().join("dest.txt");
+        tokio::fs::write(&source, b"new").await.unwrap();
+        tokio::fs::write(&target, b"old").await.unwrap();
+
+        let state = probe_sourced_state(ApplyMode::Guest, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotSourcedAsCopy));
+    }
+
+    /// Guest mode + path doesn't exist.
+    #[tokio::test]
+    async fn guest_missing_path_reports_not_sourced_as_copy() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let target = dir.path().join("dest.txt");
+
+        let state = probe_sourced_state(ApplyMode::Guest, &file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotSourcedAsCopy));
+    }
+
+    /// Pin the change-emission table: `(Sourced, NotSourcedAsCopy)` lowers to
+    /// a byte-copy `Write`, `(Sourced, NotSourcedAsSymlink)` lowers to a
+    /// `Symlink` `Write`. These two are easy to swap by accident — the only
+    /// thing differentiating a local-mode and a guest-mode apply for a sourced
+    /// file.
+    #[test]
+    fn change_for_not_sourced_as_copy_writes_path_source() {
+        let resource = FileResource::Sourced {
+            source: FilePath::new("/host/src.txt"),
+            path: FilePath::new("/target/dest.txt"),
+        };
+        let change = File::change(&resource, &FileState::NotSourcedAsCopy).expect("some change");
+        match change {
+            FileChange::Write {
+                path,
+                source: FileSource::Path(s),
+            } => {
+                assert_eq!(path.as_path(), std::path::Path::new("/target/dest.txt"));
+                assert_eq!(s.as_path(), std::path::Path::new("/host/src.txt"));
+            }
+            other => panic!("expected Write{{Path}}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn change_for_not_sourced_as_symlink_writes_symlink_source() {
+        let resource = FileResource::Sourced {
+            source: FilePath::new("/host/src.txt"),
+            path: FilePath::new("/target/dest.txt"),
+        };
+        let change = File::change(&resource, &FileState::NotSourcedAsSymlink).expect("some change");
+        match change {
+            FileChange::Write {
+                path,
+                source: FileSource::Symlink(s),
+            } => {
+                assert_eq!(path.as_path(), std::path::Path::new("/target/dest.txt"));
+                assert_eq!(s.as_path(), std::path::Path::new("/host/src.txt"));
+            }
+            other => panic!("expected Write{{Symlink}}, got {other:?}"),
+        }
+    }
+
+    // No `change(Sourced, Sourced) -> None` test: the match arm at file.rs
+    // `(FileResource::Sourced { .. }, FileState::Sourced) => None,` is
+    // structurally enforced (the catch-all `_ => panic!` covers every other
+    // pairing), so a redundant unit test would only exercise enum matching.
 }

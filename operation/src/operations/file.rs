@@ -34,11 +34,20 @@ pub enum FileApplyError {
 #[derive(Debug, Clone)]
 pub enum FileSource {
     Contents(Vec<u8>),
+
+    /// Copy the file at this host path into `path` atomically.
     Path(FilePath),
+
     /// Reference to a decrypted secret by name; resolved against
     /// [`Context::secrets`] at apply time so plaintext never lives in the
     /// resource/change/operation tree.
     Secret(String),
+
+    /// Make `path` a symlink pointing at this host path. Used by
+    /// `@core/file state: "sourced"` (and `@core/directory state: "sourced"`)
+    /// when running in [`ApplyMode::Local`](lusid_ctx::ApplyMode::Local) so
+    /// edits to the source propagate without a re-apply.
+    Symlink(FilePath),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -123,19 +132,7 @@ pub enum FileOperation {
         path: FilePath,
         source: FileSource,
     },
-    Copy {
-        source: FilePath,
-        destination: FilePath,
-    },
-    Move {
-        source: FilePath,
-        destination: FilePath,
-    },
     Remove {
-        path: FilePath,
-    },
-    CreateSymlink {
-        source: FilePath,
         path: FilePath,
     },
     ChangeMode {
@@ -167,29 +164,13 @@ impl Display for FileOperation {
                 FileSource::Secret(name) => {
                     write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
                 }
+                FileSource::Symlink(source_path) => write!(
+                    f,
+                    "File::Write(path = {}, source = Symlink({}))",
+                    path, source_path
+                ),
             },
-            FileOperation::Copy {
-                source,
-                destination,
-            } => write!(
-                f,
-                "File::Copy(source = {}, destination = {})",
-                source, destination
-            ),
-            FileOperation::Move {
-                source,
-                destination,
-            } => write!(
-                f,
-                "File::Move(source = {}, destination = {})",
-                source, destination
-            ),
             FileOperation::Remove { path } => write!(f, "File::Remove(path = {})", path),
-            FileOperation::CreateSymlink { source, path } => write!(
-                f,
-                "File::CreateSymlink(source = {}, path = {})",
-                source, path
-            ),
             FileOperation::ChangeMode { path, mode } => {
                 write!(f, "File::ChangeMode(path = {}, mode = {})", path, mode)
             }
@@ -206,12 +187,18 @@ impl Display for FileOperation {
 
 impl_display_render!(FileOperation);
 
-/// Apply-time resolution of a [`FileSource`] for a write: `Bytes` covers
-/// both inline contents and decrypted-secret plaintext; `Copy` covers a
-/// path-sourced copy.
+/// Apply-time resolution of a [`FileSource`] for a write:
+///
+/// - `Bytes` covers both inline contents and decrypted-secret plaintext.
+/// - `Copy` covers a path-sourced copy.
+/// - `Symlink` covers an atomic symlink replacement.
+///
+/// Resolved up-front so the inner async block doesn't borrow `ctx` (and so
+/// secret plaintext lives only as long as the `Vec<u8>` it's copied into).
 enum WriteSource {
     Bytes(Vec<u8>),
     Copy(FilePath),
+    Symlink(FilePath),
 }
 
 #[derive(Debug, Clone)]
@@ -240,21 +227,26 @@ impl OperationType for File {
 
         match operation.clone() {
             FileOperation::Write { path, source } => {
-                info!("[file] write file: {}", path);
-                // Resolve up-front so the inner async block doesn't borrow
-                // ctx. For `Secret`, plaintext is copied out of the
-                // `SecretBox` envelope into a plain `Vec<u8>` that lives
-                // only for the duration of the write and is dropped
-                // immediately after.
                 let resolved: WriteSource = match source {
-                    FileSource::Contents(bytes) => WriteSource::Bytes(bytes),
-                    FileSource::Path(source) => WriteSource::Copy(source),
+                    FileSource::Contents(bytes) => {
+                        info!("[file] write contents: {} ({} bytes)", path, bytes.len());
+                        WriteSource::Bytes(bytes)
+                    }
+                    FileSource::Path(source) => {
+                        info!("[file] copy file: {} -> {}", source, path);
+                        WriteSource::Copy(source)
+                    }
                     FileSource::Secret(name) => {
+                        info!("[file] write secret: {} -> {}", name, path);
                         let secret = ctx
                             .secrets()
                             .get(&name)
                             .ok_or_else(|| FileApplyError::MissingSecret { name: name.clone() })?;
                         WriteSource::Bytes(secret.expose_secret().as_bytes().to_vec())
+                    }
+                    FileSource::Symlink(source) => {
+                        info!("[file] create symlink: {} -> {}", path, source);
+                        WriteSource::Symlink(source)
                     }
                 };
                 Ok((
@@ -266,35 +258,10 @@ impl OperationType for File {
                             WriteSource::Copy(source) => {
                                 fs::copy_file_atomic(source.as_path(), path.as_path()).await?
                             }
+                            WriteSource::Symlink(source) => {
+                                fs::create_symlink_atomic(source.as_path(), path.as_path()).await?
+                            }
                         }
-                        Ok(())
-                    }),
-                    stdout,
-                    stderr,
-                ))
-            }
-            FileOperation::Copy {
-                source,
-                destination,
-            } => {
-                info!("[file] copy file: {} -> {}", source, destination);
-                Ok((
-                    Box::pin(async move {
-                        fs::copy_file_atomic(source.as_path(), destination.as_path()).await?;
-                        Ok(())
-                    }),
-                    stdout,
-                    stderr,
-                ))
-            }
-            FileOperation::Move {
-                source,
-                destination,
-            } => {
-                info!("[file] move file: {} -> {}", source, destination);
-                Ok((
-                    Box::pin(async move {
-                        fs::rename_file(source.as_path(), destination.as_path()).await?;
                         Ok(())
                     }),
                     stdout,
@@ -306,17 +273,6 @@ impl OperationType for File {
                 Ok((
                     Box::pin(async move {
                         fs::remove_file(path.as_path()).await?;
-                        Ok(())
-                    }),
-                    stdout,
-                    stderr,
-                ))
-            }
-            FileOperation::CreateSymlink { source, path } => {
-                info!("[file] create symlink: {} -> {}", path, source);
-                Ok((
-                    Box::pin(async move {
-                        fs::create_symlink(source.as_path(), path.as_path()).await?;
                         Ok(())
                     }),
                     stdout,
