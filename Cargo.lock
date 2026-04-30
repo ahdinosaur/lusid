@@ -2604,11 +2604,9 @@ version = "0.1.0"
 dependencies = [
  "displaydoc",
  "indexmap",
- "lusid-secrets",
  "rimu",
  "rimu-interop",
  "rust_decimal",
- "secrecy",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -3757,6 +3755,7 @@ dependencies = [
  "rimu-value",
  "rust_decimal",
  "rust_decimal_macros",
+ "typed-path",
 ]
 
 [[package]]
@@ -3771,6 +3770,7 @@ dependencies = [
  "ryu",
  "serde",
  "thiserror 2.0.18",
+ "typed-path",
 ]
 
 [[package]]
@@ -5130,6 +5130,12 @@ checksum = "cb30dbbd9036155e74adad6812e9898d03ec374946234fbcebd5dfc7b9187b90"
 dependencies = [
  "rustc-hash 2.1.2",
 ]
+
+[[package]]
+name = "typed-path"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e28f89b80c87b8fb0cf04ab448d5dd0dd0ade2f8891bae878de66a75a28600e"
 
 [[package]]
 name = "typenum"

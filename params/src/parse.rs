@@ -37,14 +37,11 @@
 //! enclosing struct.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use displaydoc::Display;
 use indexmap::IndexMap;
-use lusid_secrets::Secret;
 use rimu::{Number, Span, Spanned, Value};
 use rust_decimal::prelude::ToPrimitive;
-use secrecy::SecretBox;
 use thiserror::Error;
 
 /// Failures while parsing a Rimu value into a typed Rust value.
@@ -67,9 +64,6 @@ pub enum ParseError {
 
     /// Target-path string \"{value}\" must be absolute
     TargetPathNotAbsolute { value: String },
-
-    /// Expected a secret string, got Null — check that ctx.secrets.<name> matches an existing <name>.age file
-    NullSecret,
 
     /// Failed to parse list at index {index}: {error}
     ListItem {
@@ -283,11 +277,6 @@ impl StructFields {
         self.optional(key, parse_target_path)
     }
 
-    /// Convenience: read a required secret field.
-    pub fn required_secret(&mut self, key: &str) -> Result<Secret, Spanned<ParseError>> {
-        self.required(key, parse_secret)
-    }
-
     /// Convenience: read a required `Vec<String>` field.
     pub fn required_string_list(&mut self, key: &str) -> Result<Vec<String>, Spanned<ParseError>> {
         self.required(key, |value| parse_list(value, parse_string))
@@ -435,7 +424,7 @@ pub fn parse_host_path(value: Spanned<Value>) -> Result<PathBuf, Spanned<ParseEr
 pub fn parse_target_path(value: Spanned<Value>) -> Result<String, Spanned<ParseError>> {
     let (value, span) = value.take();
     match value {
-        Value::TargetPath(s) => Ok(s),
+        Value::TargetPath(s) => Ok(s.to_string()),
         Value::String(s) => {
             if Path::new(&s).is_absolute() {
                 Ok(s)
@@ -449,24 +438,6 @@ pub fn parse_target_path(value: Spanned<Value>) -> Result<String, Spanned<ParseE
         other => Err(Spanned::new(
             ParseError::TypeMismatch {
                 expected: "target-path or absolute string",
-                got: Box::new(other),
-            },
-            span,
-        )),
-    }
-}
-
-/// Parse a secret field. `Null` is rejected with a dedicated error so a
-/// typo'd `ctx.secrets.<name>` lookup surfaces with a clear hint instead of
-/// a generic type-mismatch.
-pub fn parse_secret(value: Spanned<Value>) -> Result<Secret, Spanned<ParseError>> {
-    let (value, span) = value.take();
-    match value {
-        Value::String(s) => Ok(Arc::new(SecretBox::new(Box::new(s)))),
-        Value::Null => Err(Spanned::new(ParseError::NullSecret, span)),
-        other => Err(Spanned::new(
-            ParseError::TypeMismatch {
-                expected: "secret string",
                 got: Box::new(other),
             },
             span,

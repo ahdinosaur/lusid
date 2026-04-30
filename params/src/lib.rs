@@ -50,7 +50,7 @@ pub mod parse;
 
 pub use crate::parse::{
     FromRimu, ParseError, StructFields, parse_bool, parse_host_path, parse_list, parse_number,
-    parse_secret, parse_string, parse_target_path, parse_u32,
+    parse_string, parse_target_path, parse_u32,
 };
 
 use std::path::{Path, PathBuf};
@@ -99,8 +99,6 @@ impl ParamsContext {
 ///   matches the inner type.
 /// - `HostPath` / `TargetPath` carry stricter semantics than `String` (see
 ///   the module-level docs).
-/// - `Secret` is a `String` at the Rimu level, but the parser produces a
-///   redacted-on-Debug [`lusid_secrets::Secret`].
 #[derive(Debug, Clone)]
 pub enum ParamType {
     Boolean,
@@ -116,8 +114,6 @@ pub enum ParamType {
     HostPath,
 
     TargetPath,
-
-    Secret,
 }
 
 #[derive(Debug, Clone)]
@@ -215,7 +211,6 @@ impl FromRimuUntyped for ParamType {
             "number" => Ok(ParamType::Number),
             "host-path" => Ok(ParamType::HostPath),
             "target-path" => Ok(ParamType::TargetPath),
-            "secret" => Ok(ParamType::Secret),
             "list" => {
                 let item = object
                     .swap_remove("item")
@@ -386,18 +381,6 @@ pub enum ValidateValueError {
         #[source]
         error: Box<ValidateValueError>,
     },
-
-    /// Expected a secret string, got Null — check that `ctx.secrets.<name>` matches an existing `<name>.age` file
-    //
-    // Note(cc): This is a partial mitigation for typos in `ctx.secrets.<name>`
-    // references. It only fires when the Null flows directly into a
-    // `ParamType::Secret` field. A Null that gets used in e.g. string
-    // concatenation or passed to a non-Secret param won't be caught here —
-    // see the `Note(cc)` in `plan/src/eval.rs` for the full fix (strict
-    // `ctx.secrets` map that errors at access time, which needs Rimu support).
-    NullSecret {
-        expected_type: Box<Spanned<ParamType>>,
-    },
 }
 
 #[derive(Debug, Clone, Error, Display)]
@@ -513,18 +496,8 @@ fn coerce_type(
             if !Path::new(&s).is_absolute() {
                 return Err(mismatch(param_type, &Spanned::new(Value::String(s), span)));
             }
-            Ok(Spanned::new(Value::TargetPath(s), span))
+            Ok(Spanned::new(Value::TargetPath(s.into()), span))
         }
-
-        // Note(cc): empty-string secrets pass — a secret file can legitimately
-        // contain an empty plaintext (rare, but not impossible). If we ever
-        // want to reject this, do it here with a dedicated error variant
-        // rather than reusing `NullSecret` (which speaks specifically about
-        // typo-on-lookup).
-        (ParamType::Secret, val @ Value::String(_)) => Ok(Spanned::new(val, span)),
-        (ParamType::Secret, Value::Null) => Err(ValidateValueError::NullSecret {
-            expected_type: Box::new(param_type.clone()),
-        }),
 
         (ParamType::List { item }, Value::List(items)) => {
             let mut out = Vec::with_capacity(items.len());
@@ -853,23 +826,6 @@ mod tests {
         let value = obj(vec![("path", Value::String("rel".into()))], empty_span());
         let err = validate(Some(&schema), Some(value), &ctx()).unwrap_err();
         assert!(matches!(err, ParamsValidationError::Struct(_)));
-    }
-
-    #[test]
-    fn null_for_secret_returns_null_secret_error() {
-        let schema = struct_schema(vec![("token", ParamType::Secret, false)]);
-        let value = obj(vec![("token", Value::Null)], empty_span());
-        let err = validate(Some(&schema), Some(value), &ctx()).unwrap_err();
-        let ParamsValidationError::Struct(boxed) = err else {
-            panic!("expected Struct error");
-        };
-        match boxed.errors.first() {
-            Some(ParamValidationError::InvalidParam { error, .. }) => assert!(matches!(
-                error.as_ref(),
-                ValidateValueError::NullSecret { .. }
-            )),
-            other => panic!("expected InvalidParam wrapping NullSecret, got {other:?}"),
-        }
     }
 
     #[test]
