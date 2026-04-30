@@ -5,7 +5,7 @@ use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_operation::{Operation, operations::systemd::SystemdOperation};
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 use thiserror::Error;
@@ -19,8 +19,8 @@ pub struct SystemdParams {
     pub active: Option<bool>,
 }
 
-impl FromRimu for SystemdParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for SystemdParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         let name = fields.required_string("name")?;
         let enabled = fields.optional_bool("enabled")?;

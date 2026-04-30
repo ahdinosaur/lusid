@@ -10,7 +10,7 @@ use lusid_operation::{
     Operation,
     operations::podman::{CONFIG_HASH_LABEL, PodmanOperation},
 };
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 use serde::{Deserialize, Serialize};
@@ -46,8 +46,8 @@ pub enum PodmanParams {
     },
 }
 
-impl FromRimu for PodmanParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for PodmanParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         let state = fields.take_discriminator("state", &["present", "absent"])?;
         let out = match state {

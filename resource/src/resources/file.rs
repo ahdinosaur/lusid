@@ -8,7 +8,7 @@ use lusid_operation::{
     Operation,
     operations::file::{FileGroup, FileMode, FileOperation, FilePath, FileSource, FileUser},
 };
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 use secrecy::ExposeSecret;
@@ -36,8 +36,8 @@ pub enum FileParams {
     },
 }
 
-impl FromRimu for FileParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for FileParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         let state = fields.take_discriminator("state", &["sourced", "present", "absent"])?;
         let out = match state {

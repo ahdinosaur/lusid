@@ -5,7 +5,7 @@
 //! captured by the [`ResourceType`] trait:
 //!
 //! 1. **Params** — friendly user-facing struct, parsed from the plan's Rimu
-//!    value via [`FromRimu`] (one-pass shape validation + typed extraction).
+//!    value via [`ParseParams`] (one-pass shape validation + typed extraction).
 //! 2. **Resource** — one or more "atoms" produced from Params. One apt
 //!    `packages: [a, b]` param expands to two atoms (one per package). Atoms are
 //!    arranged in a [`CausalityTree`] so resource-internal ordering can be declared.
@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use lusid_causality::CausalityTree;
 use lusid_ctx::Context;
 use lusid_operation::Operation;
-use lusid_params::FromRimu;
+use lusid_params::ParseParams;
 use lusid_view::Render;
 use thiserror::Error;
 
@@ -69,10 +69,10 @@ pub trait ResourceType {
     const ID: &'static str;
 
     /// User-facing params struct, parsed directly from the plan's Rimu value
-    /// via [`FromRimu`]. Each variant of the struct/enum corresponds to an
+    /// via [`ParseParams`]. Each variant of the struct/enum corresponds to an
     /// allowed shape — the parser does shape validation and typed extraction
     /// in one pass.
-    type Params: Render + FromRimu;
+    type Params: Render + ParseParams;
 
     /// Indivisible unit of managed state. One `Params` may produce many atoms (e.g. one
     /// per package in a packages list).

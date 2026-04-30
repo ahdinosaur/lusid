@@ -8,7 +8,7 @@ use lusid_operation::{
     Operation,
     operations::command::{CommandExecutor, CommandOperation},
 };
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 use thiserror::Error;
@@ -29,8 +29,8 @@ pub enum CommandParams {
     },
 }
 
-impl FromRimu for CommandParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for CommandParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         let status = fields.take_discriminator("status", &["install", "uninstall"])?;
         let out = match status {

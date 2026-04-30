@@ -2,7 +2,7 @@
 //! `@core/<id>` namespace (e.g. `@core/apt`, `@core/file`). This module routes a plan
 //! item's module string to the matching [`ResourceType`] impl.
 
-use lusid_params::FromRimu;
+use lusid_params::ParseParams;
 use lusid_resource::{
     ResourceParams, ResourceType, apt::Apt, apt_repo::AptRepo, command::Command,
     directory::Directory, file::File, git::Git, group::Group, pacman::Pacman, podman::Podman,
@@ -49,5 +49,5 @@ fn core_module_for_resource<R: ResourceType>(
     params_value: Option<Spanned<Value>>,
 ) -> Result<R::Params, PlanItemToResourceError> {
     let params_value = params_value.ok_or(PlanItemToResourceError::MissingParams)?;
-    R::Params::from_rimu(params_value).map_err(PlanItemToResourceError::Parse)
+    R::Params::parse_params(params_value).map_err(PlanItemToResourceError::Parse)
 }

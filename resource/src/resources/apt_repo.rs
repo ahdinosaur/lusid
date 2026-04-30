@@ -9,7 +9,7 @@ use lusid_operation::{
     Operation,
     operations::{apt_repo::AptRepoOperation, file::FilePath},
 };
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 use thiserror::Error;
@@ -22,7 +22,7 @@ const SOURCES_LIST_DIR: &str = "/etc/apt/sources.list.d";
 // TODO(cc): accept `String | List<String>` for `uris` / `suites` / `components`.
 // Today every list-shaped field requires a list literal; allowing a bare string
 // would let single-entry plans skip the brackets. The hand-written parser in
-// `FromRimu for AptRepoParams` would gain a `parse_string_or_list(value)` helper.
+// `ParseParams for AptRepoParams` would gain a `parse_string_or_list(value)` helper.
 //
 // TODO(cc): validate `name` at param-time with a filesystem-safe regex
 // (`^[a-z0-9][a-z0-9._-]*$`). `name` is interpolated into `/etc/apt/keyrings/`
@@ -49,8 +49,8 @@ pub struct AptRepoParams {
     pub enabled: Option<bool>,
 }
 
-impl FromRimu for AptRepoParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for AptRepoParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         let name = fields.required_string("name")?;
         let uris = fields.required_string_list("uris")?;

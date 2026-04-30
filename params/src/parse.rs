@@ -3,7 +3,7 @@
 //!
 //! This is the lusid-side of "Option C" in the params roadmap: the schema
 //! ([`ParamType`] / [`ParamTypes`]) and the typed extraction live in the same
-//! pass. Resources implement [`FromRimu`] for their `Params` types and pull
+//! pass. Resources implement [`ParseParams`] for their `Params` types and pull
 //! fields out via [`StructFields`].
 //!
 //! # Path types
@@ -58,7 +58,7 @@ pub enum ParseError {
     /// Host-path string \"{value}\" must be relative
     HostPathNotRelative { value: String },
 
-    /// Cannot resolve relative host-path \"{value}\": its value-span source ({source_id:?}) has no parent directory to anchor against. This usually means the value came from CLI `--params` JSON (empty source) or a synthesised string. Declare the field as `host-path` in the plan's params schema so [`crate::validate`] coerces it once at the plan boundary against `ctx.origin`.
+    /// Cannot resolve relative host-path \"{value}\": its value-span source ({source_id:?}) has no parent directory to anchor against. This usually means the value came from CLI `--params` JSON (empty source) or a synthesised string. Declare the field as `host-path` in the plan's params schema so [`crate::validate`] coerces it once at the plan boundary against `ctx.root_path`.
     HostPathNoSourceDir { value: String, source_id: String },
 
     /// Target-path string \"{value}\" must be absolute
@@ -95,8 +95,8 @@ pub enum ParseError {
 /// Implementors decide how to read their shape out of the dynamic Rimu value.
 /// This is the resource-boundary trait — every `@core/<id>` resource impls it
 /// for its `Params` type.
-pub trait FromRimu: Sized {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>>;
+pub trait ParseParams: Sized {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>>;
 }
 
 /// Helper that consumes a Rimu object's fields by name, returning typed values

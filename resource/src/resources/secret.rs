@@ -30,7 +30,7 @@ use lusid_operation::{
     Operation,
     operations::file::{FileGroup, FileMode, FilePath, FileUser},
 };
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 
@@ -51,8 +51,8 @@ pub struct SecretParams {
     pub group: Option<FileGroup>,
 }
 
-impl FromRimu for SecretParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for SecretParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         let name = fields.required_string("name")?;
         let path = FilePath::new(fields.required_target_path("path")?);

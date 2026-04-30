@@ -5,7 +5,7 @@ use lusid_causality::{CausalityMeta, CausalityTree};
 use lusid_cmd::{Command, CommandError};
 use lusid_ctx::Context;
 use lusid_operation::{Operation, operations::apt::AptOperation};
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 use thiserror::Error;
@@ -18,8 +18,8 @@ pub enum AptParams {
     Packages { packages: Vec<String> },
 }
 
-impl FromRimu for AptParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for AptParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         // Untagged dispatch: `packages` (the more specific list form) wins
         // when present; otherwise we read the singular `package` field.

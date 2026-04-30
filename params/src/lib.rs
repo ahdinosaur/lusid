@@ -9,9 +9,9 @@
 //!   *and* coerces string-shaped paths into the typed Rimu variants
 //!   (`Value::HostPath` / `Value::TargetPath`) before handing them to
 //!   `setup` (see [`ParamsContext`] for how resolution origins are picked).
-//! - **Parser** — the [`parse`] module ([`FromRimu`], [`StructFields`], the
+//! - **Parser** — the [`parse`] module ([`ParseParams`], [`StructFields`], the
 //!   `parse_*` helpers) takes a Rimu value and produces a typed Rust value
-//!   in one pass. Each `@core/<id>` resource implements [`FromRimu`] for its
+//!   in one pass. Each `@core/<id>` resource implements [`ParseParams`] for its
 //!   `Params` type.
 //!
 //! Resources used to declare a [`ParamTypes`] schema *and* a serde
@@ -30,7 +30,7 @@
 //! - [`ParamType::HostPath`]: a path on the local machine. [`validate`] accepts
 //!   either Rimu's typed [`rimu::Value::HostPath`] or a relative
 //!   [`rimu::Value::String`] and rewrites the string into a `Value::HostPath`
-//!   resolved against the value's span source (or [`ParamsContext::origin`]
+//!   resolved against the value's span source (or [`ParamsContext::root_path`]
 //!   when there isn't one).
 //! - [`ParamType::TargetPath`]: an absolute path on the managed host. Accepts
 //!   [`rimu::Value::TargetPath`] or an absolute [`rimu::Value::String`]; the
@@ -49,7 +49,7 @@
 pub mod parse;
 
 pub use crate::parse::{
-    FromRimu, ParseError, StructFields, parse_bool, parse_host_path, parse_list, parse_number,
+    ParseError, ParseParams, StructFields, parse_bool, parse_host_path, parse_list, parse_number,
     parse_string, parse_target_path, parse_u32,
 };
 
@@ -58,12 +58,12 @@ use std::path::{Path, PathBuf};
 use displaydoc::Display;
 use indexmap::IndexMap;
 use rimu::{Span, Spanned, Value, ValueObject};
-use rimu_interop::FromRimu as FromRimuUntyped;
+use rimu_interop::FromRimu;
 use thiserror::Error;
 
 /// Coercion context for [`validate`].
 ///
-/// Carries the **fallback origin** used to resolve relative `host-path` strings
+/// Carries the **fallback root path** used to resolve relative `host-path` strings
 /// whose value span doesn't point at a real source file — e.g. CLI-supplied
 /// `--params` JSON, where the `SourceId` is empty. Strings whose span carries a
 /// real `.lusid` source resolve against that file's parent directory instead,
@@ -72,24 +72,24 @@ use thiserror::Error;
 ///
 /// Sub-plans share their parent's `ParamsContext`. By the time forwarded values
 /// reach a sub-plan they're already typed (`Value::HostPath`) — `validate`
-/// rewrote them at the parent boundary — so the origin is only consulted for
+/// rewrote them at the parent boundary — so the root path is only consulted for
 /// literal strings that arrive at the sub-plan boundary. That makes parent →
 /// child forwarding behave consistently regardless of how deep the recursion
 /// runs.
 #[derive(Debug, Clone)]
 pub struct ParamsContext {
-    origin: PathBuf,
+    root_path: PathBuf,
 }
 
 impl ParamsContext {
-    pub fn new(origin: impl Into<PathBuf>) -> Self {
+    pub fn new(root_path: impl Into<PathBuf>) -> Self {
         Self {
-            origin: origin.into(),
+            root_path: root_path.into(),
         }
     }
 
-    pub fn origin(&self) -> &Path {
-        &self.origin
+    pub fn root_path(&self) -> &Path {
+        &self.root_path
     }
 }
 
@@ -188,7 +188,7 @@ pub enum ParamTypeFromRimuError {
     ObjectValue(Box<Spanned<ParamTypeFromRimuError>>),
 }
 
-impl FromRimuUntyped for ParamType {
+impl FromRimu for ParamType {
     type Error = ParamTypeFromRimuError;
 
     fn from_rimu(value: Value) -> Result<Self, Self::Error> {
@@ -248,7 +248,7 @@ pub enum ParamFieldFromRimuError {
     FieldType(#[from] ParamTypeFromRimuError),
 }
 
-impl FromRimuUntyped for ParamField {
+impl FromRimu for ParamField {
     type Error = ParamFieldFromRimuError;
 
     fn from_rimu(value: Value) -> Result<Self, Self::Error> {
@@ -295,7 +295,7 @@ pub enum ParamTypesFromRimuError {
     },
 }
 
-impl FromRimuUntyped for ParamTypes {
+impl FromRimu for ParamTypes {
     type Error = ParamTypesFromRimuError;
 
     /// Parse a schema declaration in the plan:
@@ -444,18 +444,18 @@ fn mismatch(typ: &Spanned<ParamType>, value: &Spanned<Value>) -> ValidateValueEr
 ///
 /// Prefer the value's own span source (the `.lusid` file the literal was
 /// written in) — that way a literal string keeps the same meaning whether the
-/// parent or a sub-plan happens to validate it. Fall back to `ctx.origin` when
-/// the span carries no real source (CLI-supplied `--params` have an empty
+/// parent or a sub-plan happens to validate it. Fall back to `ctx.root_path`
+/// when the span carries no real source (CLI-supplied `--params` have an empty
 /// `SourceId`) or when the source has no parent directory to anchor against.
 fn coerce_origin(span: &Span, ctx: &ParamsContext) -> PathBuf {
     let source_id = span.source();
     let source = source_id.as_str();
     if source.is_empty() {
-        return ctx.origin.to_path_buf();
+        return ctx.root_path.to_path_buf();
     }
     match Path::new(source).parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
-        _ => ctx.origin.to_path_buf(),
+        _ => ctx.root_path.to_path_buf(),
     }
 }
 
@@ -475,8 +475,8 @@ fn coerce_type(
         (ParamType::Number, val @ Value::Number(_)) => Ok(Spanned::new(val, span)),
 
         // HostPath: typed values pass through unchanged; relative strings get
-        // resolved against the value-span's source dir (or `ctx.origin` if the
-        // span has no real source) and re-emitted as a typed `Value::HostPath`.
+        // resolved against the value-span's source dir (or `ctx.root_path` if
+        // the span has no real source) and re-emitted as a typed `Value::HostPath`.
         // The rewrite is what fixes parent → sub-plan forwarding: the parent's
         // validate produces a typed path, so the sub-plan never sees a string.
         (ParamType::HostPath, val @ Value::HostPath(_)) => Ok(Spanned::new(val, span)),
@@ -605,7 +605,7 @@ fn coerce_struct(
 ///   if none match, all per-case errors are returned together.
 ///
 /// Resource params don't go through this — they parse straight to typed Rust
-/// values via [`FromRimu`]. This function is plan-only: it catches user
+/// values via [`ParseParams`]. This function is plan-only: it catches user
 /// `--params` mistakes against the plan's declared schema before `setup`
 /// runs, *and* turns string-shaped paths into the typed Rimu variants so
 /// downstream sub-plans see a uniform value shape.

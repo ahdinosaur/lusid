@@ -8,7 +8,7 @@ use lusid_operation::{
     Operation,
     operations::{file::FilePath, user::UserOperation},
 };
-use lusid_params::{FromRimu, ParseError, StructFields};
+use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
 use rimu::{Spanned, Value};
 use thiserror::Error;
@@ -46,8 +46,8 @@ pub enum UserParams {
     },
 }
 
-impl FromRimu for UserParams {
-    fn from_rimu(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
+impl ParseParams for UserParams {
+    fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
         let state = fields.take_discriminator("state", &["present", "absent"])?;
         let out = match state {
