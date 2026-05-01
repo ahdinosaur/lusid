@@ -10,7 +10,7 @@ use lusid_operation::{
 };
 use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{Spanned, Value};
+use rimu::{Span, Spanned, Value};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
@@ -25,6 +25,9 @@ pub enum FileParams {
     /// operator's filesystem isn't reachable.
     Sourced {
         source: FilePath,
+        /// Span of the `source` value in the plan source. Carried so
+        /// host-path validation errors can point at the offending line.
+        source_span: Span,
         path: FilePath,
         mode: Option<FileMode>,
         user: Option<FileUser>,
@@ -48,6 +51,9 @@ pub enum FileParams {
     /// thread it through `FileChange::CreateSymlink` to the operation.
     Linked {
         source: FilePath,
+        /// Span of the `source` value in the plan source. See
+        /// [`FileParams::Sourced::source_span`] for rationale.
+        source_span: Span,
         path: FilePath,
     },
 
@@ -68,35 +74,35 @@ impl ParseParams for FileParams {
         let state =
             fields.take_discriminator("state", &["sourced", "linked", "present", "absent"])?;
         let out = match state {
-            "sourced" => FileParams::Sourced {
+            "sourced" => {
                 // `source` is a `host-path`; the parser resolves a relative
                 // string against the plan's source dir (or accepts a typed
                 // `Value::HostPath` from a plan that uses `host_path("./...")`).
                 // Either way we lower to a `FilePath` string for the operation
-                // layer.
-                source: FilePath::new(
-                    fields
-                        .required_host_path("source")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                path: FilePath::new(fields.required_target_path("path")?),
-                mode: fields.optional_u32("mode")?.map(FileMode::new),
-                user: fields.optional_string("user")?.map(FileUser::new),
-                group: fields.optional_string("group")?.map(FileGroup::new),
-            },
-            "linked" => FileParams::Linked {
+                // layer; the original span is kept for downstream diagnostics.
+                let (source_path, source_span) =
+                    fields.required_host_path_spanned("source")?.take();
+                FileParams::Sourced {
+                    source: FilePath::new(source_path.to_string_lossy().into_owned()),
+                    source_span,
+                    path: FilePath::new(fields.required_target_path("path")?),
+                    mode: fields.optional_u32("mode")?.map(FileMode::new),
+                    user: fields.optional_string("user")?.map(FileUser::new),
+                    group: fields.optional_string("group")?.map(FileGroup::new),
+                }
+            }
+            "linked" => {
                 // No `mode`/`user`/`group` here — see the variant docs. Any
                 // such field will be left in `fields` and rejected by
                 // `fields.finish()` below as an unknown key.
-                source: FilePath::new(
-                    fields
-                        .required_host_path("source")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                path: FilePath::new(fields.required_target_path("path")?),
-            },
+                let (source_path, source_span) =
+                    fields.required_host_path_spanned("source")?.take();
+                FileParams::Linked {
+                    source: FilePath::new(source_path.to_string_lossy().into_owned()),
+                    source_span,
+                    path: FilePath::new(fields.required_target_path("path")?),
+                }
+            }
             "present" => FileParams::Present {
                 path: FilePath::new(fields.required_target_path("path")?),
                 mode: fields.optional_u32("mode")?.map(FileMode::new),
@@ -119,7 +125,7 @@ impl Display for FileParams {
             FileParams::Sourced { source, path, .. } => {
                 write!(f, "File::Sourced(source = {source}, path = {path})")
             }
-            FileParams::Linked { source, path } => {
+            FileParams::Linked { source, path, .. } => {
                 write!(f, "File::Linked(source = {source}, path = {path})")
             }
             FileParams::Present { path, .. } => write!(f, "File::Present(path = {path})"),
@@ -356,6 +362,7 @@ impl ResourceType for File {
         match params {
             FileParams::Sourced {
                 source,
+                source_span: _,
                 path,
                 mode,
                 user,
@@ -372,7 +379,11 @@ impl ResourceType for File {
                 nodes
             }
 
-            FileParams::Linked { source, path } => vec![CausalityTree::leaf(
+            FileParams::Linked {
+                source,
+                source_span: _,
+                path,
+            } => vec![CausalityTree::leaf(
                 CausalityMeta::default(),
                 FileResource::Linked { source, path },
             )],

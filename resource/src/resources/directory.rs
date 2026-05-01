@@ -13,7 +13,7 @@ use lusid_operation::{
 };
 use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{Spanned, Value};
+use rimu::{Span, Spanned, Value};
 use thiserror::Error;
 
 use crate::ResourceType;
@@ -29,6 +29,9 @@ pub enum DirectoryParams {
     /// `file.recurse`.
     Sourced {
         source: FilePath,
+        /// Span of the `source` value in the plan source. Carried so
+        /// host-path validation errors can point at the offending line.
+        source_span: Span,
         path: FilePath,
         mode: Option<FileMode>,
         user: Option<FileUser>,
@@ -44,6 +47,9 @@ pub enum DirectoryParams {
     /// relative-target follow-up.
     Linked {
         source: FilePath,
+        /// Span of the `source` value in the plan source. See
+        /// [`DirectoryParams::Sourced::source_span`] for rationale.
+        source_span: Span,
         path: FilePath,
     },
 
@@ -64,27 +70,27 @@ impl ParseParams for DirectoryParams {
         let state =
             fields.take_discriminator("state", &["sourced", "linked", "present", "absent"])?;
         let out = match state {
-            "sourced" => DirectoryParams::Sourced {
-                source: FilePath::new(
-                    fields
-                        .required_host_path("source")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                path: FilePath::new(fields.required_target_path("path")?),
-                mode: fields.optional_u32("mode")?.map(FileMode::new),
-                user: fields.optional_string("user")?.map(FileUser::new),
-                group: fields.optional_string("group")?.map(FileGroup::new),
-            },
-            "linked" => DirectoryParams::Linked {
-                source: FilePath::new(
-                    fields
-                        .required_host_path("source")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                path: FilePath::new(fields.required_target_path("path")?),
-            },
+            "sourced" => {
+                let (source_path, source_span) =
+                    fields.required_host_path_spanned("source")?.take();
+                DirectoryParams::Sourced {
+                    source: FilePath::new(source_path.to_string_lossy().into_owned()),
+                    source_span,
+                    path: FilePath::new(fields.required_target_path("path")?),
+                    mode: fields.optional_u32("mode")?.map(FileMode::new),
+                    user: fields.optional_string("user")?.map(FileUser::new),
+                    group: fields.optional_string("group")?.map(FileGroup::new),
+                }
+            }
+            "linked" => {
+                let (source_path, source_span) =
+                    fields.required_host_path_spanned("source")?.take();
+                DirectoryParams::Linked {
+                    source: FilePath::new(source_path.to_string_lossy().into_owned()),
+                    source_span,
+                    path: FilePath::new(fields.required_target_path("path")?),
+                }
+            }
             "present" => DirectoryParams::Present {
                 path: FilePath::new(fields.required_target_path("path")?),
                 mode: fields.optional_u32("mode")?.map(FileMode::new),
@@ -107,7 +113,7 @@ impl Display for DirectoryParams {
             DirectoryParams::Sourced { source, path, .. } => {
                 write!(f, "Directory::Sourced(source = {source}, path = {path})")
             }
-            DirectoryParams::Linked { source, path } => {
+            DirectoryParams::Linked { source, path, .. } => {
                 write!(f, "Directory::Linked(source = {source}, path = {path})")
             }
             DirectoryParams::Present { path, .. } => write!(f, "Directory::Present(path = {path})"),
@@ -316,6 +322,7 @@ impl ResourceType for Directory {
         match params {
             DirectoryParams::Sourced {
                 source,
+                source_span: _,
                 path,
                 mode,
                 user,
@@ -332,7 +339,11 @@ impl ResourceType for Directory {
                 nodes
             }
 
-            DirectoryParams::Linked { source, path } => vec![CausalityTree::leaf(
+            DirectoryParams::Linked {
+                source,
+                source_span: _,
+                path,
+            } => vec![CausalityTree::leaf(
                 CausalityMeta::default(),
                 DirectoryResource::Linked { source, path },
             )],

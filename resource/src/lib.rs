@@ -33,6 +33,7 @@ use lusid_fs::FsError;
 use lusid_operation::{Operation, operations::file::FilePath};
 use lusid_params::ParseParams;
 use lusid_view::Render;
+use rimu::Span;
 use thiserror::Error;
 
 mod resources;
@@ -558,19 +559,24 @@ impl Resource {
 ///
 /// We catch typos and stale paths here rather than letting them surface as
 /// confusing apply-time symlink/copy failures.
+///
+/// Variants attributable to a specific plan value carry the source's
+/// [`Span`] so diagnostics can point back at the offending `.lusid` line —
+/// see AGENTS.md "spans are load-bearing". The [`Self::Fs`] variant is a
+/// low-level filesystem failure with no plan attribution, so it has no span.
 #[derive(Debug, Error)]
 pub enum HostPathValidationError {
     #[error("source host-path {path:?} for @core/file resource was not found")]
-    FileSourceMissing { path: PathBuf },
+    FileSourceMissing { path: PathBuf, span: Span },
 
     #[error("source host-path {path:?} for @core/file resource is not a regular file")]
-    FileSourceNotFile { path: PathBuf },
+    FileSourceNotFile { path: PathBuf, span: Span },
 
     #[error("source host-path {path:?} for @core/directory resource was not found")]
-    DirectorySourceMissing { path: PathBuf },
+    DirectorySourceMissing { path: PathBuf, span: Span },
 
     #[error("source host-path {path:?} for @core/directory resource is not a directory")]
-    DirectorySourceNotDirectory { path: PathBuf },
+    DirectorySourceNotDirectory { path: PathBuf, span: Span },
 
     #[error(transparent)]
     Fs(#[from] FsError),
@@ -591,22 +597,32 @@ impl ResourceParams {
     /// classify correctly; deeper symlink chains are accepted whatever
     /// `tokio::fs::metadata` resolves them to.
     ///
-    /// TODO(cc): the source `PathBuf` here is resolved but its original
-    /// `Spanned<...>` from `parse_host_path` is gone — errors don't point at
-    /// the offending `.lusid` line. Either thread `Spanned<FilePath>` through
-    /// the `Sourced`/`Linked` variants, or move this validation back into
-    /// `parse_params` so it runs while spans are still in hand. AGENTS.md
-    /// "spans are load-bearing" applies.
+    /// Plan-attributable variants of [`HostPathValidationError`] carry the
+    /// source field's span so callers can surface a diagnostic that points
+    /// at the offending `.lusid` line — see AGENTS.md "spans are
+    /// load-bearing".
     pub async fn validate_host_paths(&self) -> Result<(), HostPathValidationError> {
         match self {
-            ResourceParams::File(FileParams::Sourced { source, .. })
-            | ResourceParams::File(FileParams::Linked { source, .. }) => {
-                check_source_is_file(source).await
-            }
-            ResourceParams::Directory(DirectoryParams::Sourced { source, .. })
-            | ResourceParams::Directory(DirectoryParams::Linked { source, .. }) => {
-                check_source_is_directory(source).await
-            }
+            ResourceParams::File(FileParams::Sourced {
+                source,
+                source_span,
+                ..
+            })
+            | ResourceParams::File(FileParams::Linked {
+                source,
+                source_span,
+                ..
+            }) => check_source_is_file(source, source_span).await,
+            ResourceParams::Directory(DirectoryParams::Sourced {
+                source,
+                source_span,
+                ..
+            })
+            | ResourceParams::Directory(DirectoryParams::Linked {
+                source,
+                source_span,
+                ..
+            }) => check_source_is_directory(source, source_span).await,
             _ => Ok(()),
         }
     }
@@ -645,31 +661,41 @@ async fn resolved_metadata(path: &std::path::Path) -> Result<Option<std::fs::Met
     }
 }
 
-async fn check_source_is_file(source: &FilePath) -> Result<(), HostPathValidationError> {
+async fn check_source_is_file(
+    source: &FilePath,
+    span: &Span,
+) -> Result<(), HostPathValidationError> {
     let path = source.as_path();
     let Some(metadata) = resolved_metadata(path).await? else {
         return Err(HostPathValidationError::FileSourceMissing {
             path: path.to_path_buf(),
+            span: span.clone(),
         });
     };
     if !metadata.is_file() {
         return Err(HostPathValidationError::FileSourceNotFile {
             path: path.to_path_buf(),
+            span: span.clone(),
         });
     }
     Ok(())
 }
 
-async fn check_source_is_directory(source: &FilePath) -> Result<(), HostPathValidationError> {
+async fn check_source_is_directory(
+    source: &FilePath,
+    span: &Span,
+) -> Result<(), HostPathValidationError> {
     let path = source.as_path();
     let Some(metadata) = resolved_metadata(path).await? else {
         return Err(HostPathValidationError::DirectorySourceMissing {
             path: path.to_path_buf(),
+            span: span.clone(),
         });
     };
     if !metadata.is_dir() {
         return Err(HostPathValidationError::DirectorySourceNotDirectory {
             path: path.to_path_buf(),
+            span: span.clone(),
         });
     }
     Ok(())
@@ -699,15 +725,21 @@ impl ResourceChange {
 mod tests {
     use super::*;
     use lusid_operation::operations::file::FilePath;
+    use rimu::SourceId;
     use tempfile::tempdir;
 
     fn file_path(p: &std::path::Path) -> FilePath {
         FilePath::new(p.to_string_lossy().into_owned())
     }
 
+    fn empty_span() -> Span {
+        Span::new(SourceId::empty(), 0, 0)
+    }
+
     fn file_sourced(source: FilePath) -> ResourceParams {
         ResourceParams::File(FileParams::Sourced {
             source,
+            source_span: empty_span(),
             path: FilePath::new("/tmp/lusid-validate-test-target"),
             mode: None,
             user: None,
@@ -718,6 +750,7 @@ mod tests {
     fn directory_sourced(source: FilePath) -> ResourceParams {
         ResourceParams::Directory(DirectoryParams::Sourced {
             source,
+            source_span: empty_span(),
             path: FilePath::new("/tmp/lusid-validate-test-target"),
             mode: None,
             user: None,
@@ -728,6 +761,7 @@ mod tests {
     fn file_linked(source: FilePath) -> ResourceParams {
         ResourceParams::File(FileParams::Linked {
             source,
+            source_span: empty_span(),
             path: FilePath::new("/tmp/lusid-validate-test-target"),
         })
     }
@@ -735,6 +769,7 @@ mod tests {
     fn directory_linked(source: FilePath) -> ResourceParams {
         ResourceParams::Directory(DirectoryParams::Linked {
             source,
+            source_span: empty_span(),
             path: FilePath::new("/tmp/lusid-validate-test-target"),
         })
     }
