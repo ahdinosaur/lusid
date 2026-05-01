@@ -22,16 +22,18 @@
 //! through the match arms.
 
 use std::fmt::Display;
+use std::path::PathBuf;
 
-use crate::resources::file::FileParams;
 pub use crate::resources::*;
 
 use async_trait::async_trait;
 use lusid_causality::CausalityTree;
 use lusid_ctx::Context;
-use lusid_operation::Operation;
+use lusid_fs::FsError;
+use lusid_operation::{Operation, operations::file::FilePath};
 use lusid_params::ParseParams;
 use lusid_view::Render;
+use rimu::Span;
 use thiserror::Error;
 
 mod resources;
@@ -46,7 +48,7 @@ use crate::resources::command::{
 use crate::resources::directory::{
     Directory, DirectoryChange, DirectoryParams, DirectoryResource, DirectoryState,
 };
-use crate::resources::file::{File, FileChange, FileResource, FileState};
+use crate::resources::file::{File, FileChange, FileParams, FileResource, FileState};
 use crate::resources::git::{Git, GitChange, GitParams, GitResource, GitState};
 use crate::resources::group::{Group, GroupChange, GroupParams, GroupResource, GroupState};
 use crate::resources::pacman::{Pacman, PacmanChange, PacmanParams, PacmanResource, PacmanState};
@@ -551,6 +553,154 @@ impl Resource {
     }
 }
 
+/// Errors from [`ResourceParams::validate_host_paths`] — pre-apply checks that a
+/// `host-path` source actually exists on the operator's machine and has the
+/// expected type.
+///
+/// We catch typos and stale paths here rather than letting them surface as
+/// confusing apply-time symlink/copy failures.
+///
+/// Variants attributable to a specific plan value carry the source's
+/// [`Span`] so diagnostics can point back at the offending `.lusid` line —
+/// see AGENTS.md "spans are load-bearing". The [`Self::Fs`] variant is a
+/// low-level filesystem failure with no plan attribution, so it has no span.
+#[derive(Debug, Error)]
+pub enum HostPathValidationError {
+    #[error("source host-path {path:?} for @core/file resource was not found")]
+    FileSourceMissing { path: PathBuf, span: Span },
+
+    #[error("source host-path {path:?} for @core/file resource is not a regular file")]
+    FileSourceNotFile { path: PathBuf, span: Span },
+
+    #[error("source host-path {path:?} for @core/directory resource was not found")]
+    DirectorySourceMissing { path: PathBuf, span: Span },
+
+    #[error("source host-path {path:?} for @core/directory resource is not a directory")]
+    DirectorySourceNotDirectory { path: PathBuf, span: Span },
+
+    #[error(transparent)]
+    Fs(#[from] FsError),
+}
+
+impl ResourceParams {
+    /// Validate that any `host-path` source referenced by this params variant
+    /// exists on the operator's filesystem with the expected type.
+    ///
+    /// `@core/file` `state: "sourced"` and `state: "linked"` both require
+    /// `source` to be a regular file (or a symlink that resolves to one).
+    /// `@core/directory` `state: "sourced"` and `state: "linked"` both
+    /// require `source` to be a directory. All other variants are no-ops.
+    ///
+    /// Source paths arrive here already resolved to absolute `PathBuf`s (see
+    /// `params::ParamType::HostPath` coercion). The probe follows a single
+    /// layer of symlink so the `Symlink → File` and `Symlink → Dir` cases
+    /// classify correctly; deeper symlink chains are accepted whatever
+    /// `tokio::fs::metadata` resolves them to.
+    ///
+    /// Plan-attributable variants of [`HostPathValidationError`] carry the
+    /// source field's span so callers can surface a diagnostic that points
+    /// at the offending `.lusid` line — see AGENTS.md "spans are
+    /// load-bearing".
+    pub async fn validate_host_paths(&self) -> Result<(), HostPathValidationError> {
+        match self {
+            ResourceParams::File(FileParams::Sourced {
+                source,
+                source_span,
+                ..
+            })
+            | ResourceParams::File(FileParams::Linked {
+                source,
+                source_span,
+                ..
+            }) => check_source_is_file(source, source_span).await,
+            ResourceParams::Directory(DirectoryParams::Sourced {
+                source,
+                source_span,
+                ..
+            })
+            | ResourceParams::Directory(DirectoryParams::Linked {
+                source,
+                source_span,
+                ..
+            }) => check_source_is_directory(source, source_span).await,
+            _ => Ok(()),
+        }
+    }
+}
+
+/// Resolve `path`'s metadata, classifying symlink chains by what they
+/// ultimately resolve to. Returns `Ok(None)` if `path` (or anywhere along its
+/// symlink chain) does not exist, so callers can map both into a "source
+/// missing" diagnostic without caring whether the dangling part is the path
+/// itself or somewhere down the link chain.
+async fn resolved_metadata(path: &std::path::Path) -> Result<Option<std::fs::Metadata>, FsError> {
+    let metadata = match tokio::fs::symlink_metadata(path).await {
+        Ok(m) => m,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(source) => {
+            return Err(FsError::Metadata {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if !metadata.file_type().is_symlink() {
+        return Ok(Some(metadata));
+    }
+    // Symlink — `tokio::fs::metadata` is `stat(2)`, which walks the full
+    // chain. Dangling anywhere along the chain reads as NotFound; surface
+    // as None so the caller's `Missing` diagnostic fires (the link is
+    // useless either way).
+    match tokio::fs::metadata(path).await {
+        Ok(m) => Ok(Some(m)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(FsError::Metadata {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+async fn check_source_is_file(
+    source: &FilePath,
+    span: &Span,
+) -> Result<(), HostPathValidationError> {
+    let path = source.as_path();
+    let Some(metadata) = resolved_metadata(path).await? else {
+        return Err(HostPathValidationError::FileSourceMissing {
+            path: path.to_path_buf(),
+            span: span.clone(),
+        });
+    };
+    if !metadata.is_file() {
+        return Err(HostPathValidationError::FileSourceNotFile {
+            path: path.to_path_buf(),
+            span: span.clone(),
+        });
+    }
+    Ok(())
+}
+
+async fn check_source_is_directory(
+    source: &FilePath,
+    span: &Span,
+) -> Result<(), HostPathValidationError> {
+    let path = source.as_path();
+    let Some(metadata) = resolved_metadata(path).await? else {
+        return Err(HostPathValidationError::DirectorySourceMissing {
+            path: path.to_path_buf(),
+            span: span.clone(),
+        });
+    };
+    if !metadata.is_dir() {
+        return Err(HostPathValidationError::DirectorySourceNotDirectory {
+            path: path.to_path_buf(),
+            span: span.clone(),
+        });
+    }
+    Ok(())
+}
+
 impl ResourceChange {
     /// Lower a change into the concrete operations that execute it, preserving any
     /// intra-change ordering (e.g. `apt update` before `apt install`).
@@ -568,5 +718,303 @@ impl ResourceChange {
             ResourceChange::User(change) => User::operations(change),
             ResourceChange::Group(change) => Group::operations(change),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lusid_operation::operations::file::FilePath;
+    use rimu::SourceId;
+    use tempfile::tempdir;
+
+    fn file_path(p: &std::path::Path) -> FilePath {
+        FilePath::new(p.to_string_lossy().into_owned())
+    }
+
+    fn empty_span() -> Span {
+        Span::new(SourceId::empty(), 0, 0)
+    }
+
+    fn file_sourced(source: FilePath) -> ResourceParams {
+        ResourceParams::File(FileParams::Sourced {
+            source,
+            source_span: empty_span(),
+            path: FilePath::new("/tmp/lusid-validate-test-target"),
+            mode: None,
+            user: None,
+            group: None,
+        })
+    }
+
+    fn directory_sourced(source: FilePath) -> ResourceParams {
+        ResourceParams::Directory(DirectoryParams::Sourced {
+            source,
+            source_span: empty_span(),
+            path: FilePath::new("/tmp/lusid-validate-test-target"),
+            mode: None,
+            user: None,
+            group: None,
+        })
+    }
+
+    fn file_linked(source: FilePath) -> ResourceParams {
+        ResourceParams::File(FileParams::Linked {
+            source,
+            source_span: empty_span(),
+            path: FilePath::new("/tmp/lusid-validate-test-target"),
+        })
+    }
+
+    fn directory_linked(source: FilePath) -> ResourceParams {
+        ResourceParams::Directory(DirectoryParams::Linked {
+            source,
+            source_span: empty_span(),
+            path: FilePath::new("/tmp/lusid-validate-test-target"),
+        })
+    }
+
+    #[tokio::test]
+    async fn file_sourced_validates_when_source_is_a_file() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        file_sourced(file_path(&source))
+            .validate_host_paths()
+            .await
+            .expect("file source should validate");
+    }
+
+    #[tokio::test]
+    async fn file_sourced_errors_when_source_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("missing.txt");
+        let err = file_sourced(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceMissing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_sourced_errors_when_source_is_a_directory() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("a-dir");
+        tokio::fs::create_dir(&source).await.unwrap();
+        let err = file_sourced(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceNotFile { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_sourced_follows_symlinks_to_files() {
+        // A symlink-to-file is fine: the bytes still resolve to a regular
+        // file, which is what `state: "sourced"` ultimately needs.
+        let dir = tempdir().unwrap();
+        let real = dir.path().join("real.txt");
+        tokio::fs::write(&real, b"x").await.unwrap();
+        let link = dir.path().join("link.txt");
+        tokio::fs::symlink(&real, &link).await.unwrap();
+        file_sourced(file_path(&link))
+            .validate_host_paths()
+            .await
+            .expect("symlink to file should validate");
+    }
+
+    #[tokio::test]
+    async fn directory_sourced_validates_when_source_is_a_directory() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src");
+        tokio::fs::create_dir(&source).await.unwrap();
+        directory_sourced(file_path(&source))
+            .validate_host_paths()
+            .await
+            .expect("directory source should validate");
+    }
+
+    #[tokio::test]
+    async fn directory_sourced_errors_when_source_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("missing");
+        let err = directory_sourced(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::DirectorySourceMissing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_sourced_errors_when_source_is_a_file() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let err = directory_sourced(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::DirectorySourceNotDirectory { .. }
+        ));
+    }
+
+    // --- `state: "linked"` reuses the same file/directory checks ---------
+
+    #[tokio::test]
+    async fn file_linked_validates_when_source_is_a_file() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        file_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .expect("file source should validate");
+    }
+
+    #[tokio::test]
+    async fn file_linked_errors_when_source_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("missing.txt");
+        let err = file_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceMissing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn file_linked_errors_when_source_is_a_directory() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("a-dir");
+        tokio::fs::create_dir(&source).await.unwrap();
+        let err = file_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceNotFile { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_linked_validates_when_source_is_a_directory() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src");
+        tokio::fs::create_dir(&source).await.unwrap();
+        directory_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .expect("directory source should validate");
+    }
+
+    #[tokio::test]
+    async fn directory_linked_errors_when_source_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("missing");
+        let err = directory_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::DirectorySourceMissing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_linked_errors_when_source_is_a_file() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let err = directory_linked(file_path(&source))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::DirectorySourceNotDirectory { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn unrelated_resource_params_are_a_no_op() {
+        // Non-sourced resources don't reach the filesystem at all.
+        let absent = ResourceParams::File(FileParams::Absent {
+            path: FilePath::new("/tmp/never-touched"),
+        });
+        absent.validate_host_paths().await.expect("no-op");
+    }
+
+    /// `@core/file state: "sourced"` with a source that's a symlink to a
+    /// *directory* must error out — the validator declares files-only.
+    #[tokio::test]
+    async fn file_sourced_errors_when_source_is_a_symlink_to_a_directory() {
+        let dir = tempdir().unwrap();
+        let real_dir = dir.path().join("real-dir");
+        tokio::fs::create_dir(&real_dir).await.unwrap();
+        let link = dir.path().join("link-to-dir");
+        tokio::fs::symlink(&real_dir, &link).await.unwrap();
+
+        let err = file_sourced(file_path(&link))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceNotFile { .. }
+        ));
+    }
+
+    /// A dangling symlink as source surfaces as `*Missing`, not the lower-
+    /// level `FsError::Metadata` — the operator's mental model is "the
+    /// source isn't there", and where exactly the chain breaks isn't useful
+    /// at the diagnostic layer.
+    #[tokio::test]
+    async fn file_sourced_dangling_symlink_reports_missing() {
+        let dir = tempdir().unwrap();
+        let dangling_target = dir.path().join("never-existed.txt");
+        let link = dir.path().join("dangle.txt");
+        tokio::fs::symlink(&dangling_target, &link).await.unwrap();
+
+        let err = file_sourced(file_path(&link))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::FileSourceMissing { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn directory_sourced_dangling_symlink_reports_missing() {
+        let dir = tempdir().unwrap();
+        let dangling_target = dir.path().join("never-existed");
+        let link = dir.path().join("dangle");
+        tokio::fs::symlink(&dangling_target, &link).await.unwrap();
+
+        let err = directory_sourced(file_path(&link))
+            .validate_host_paths()
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            HostPathValidationError::DirectorySourceMissing { .. }
+        ));
     }
 }

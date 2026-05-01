@@ -261,6 +261,20 @@ impl StructFields {
         self.required(key, parse_host_path)
     }
 
+    /// Same as [`required_host_path`](Self::required_host_path) but also
+    /// returns the [`Span`] of the source value, so downstream validation
+    /// failures (e.g. "source missing on disk") can point at the offending
+    /// `.lusid` line.
+    pub fn required_host_path_spanned(
+        &mut self,
+        key: &str,
+    ) -> Result<Spanned<PathBuf>, Spanned<ParseError>> {
+        self.required(key, |value| {
+            let span = value.span();
+            parse_host_path(value).map(|path| Spanned::new(path, span))
+        })
+    }
+
     /// Convenience: read a required target-path field, returning the absolute
     /// path string verbatim.
     pub fn required_target_path(&mut self, key: &str) -> Result<String, Spanned<ParseError>> {

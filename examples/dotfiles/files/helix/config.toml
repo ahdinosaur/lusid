@@ -1,0 +1,6 @@
+# Sample Helix config managed by lusid (examples/dotfiles).
+theme = "dracula"
+
+[editor]
+line-number = "relative"
+mouse = false

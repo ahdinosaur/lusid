@@ -63,6 +63,19 @@ In `params`:
 
 If you add new path-like types, follow this pattern and be explicit about absolute/relative requirements.
 
+### `state: "sourced"` vs `state: "linked"`
+
+`@core/file` and `@core/directory` both expose two ways to materialise a host-path source on the target:
+
+- **`state: "sourced"`** — byte-copy of the file, or recursive `cp -r` of the directory tree, into `path`. Accepts optional `mode`/`user`/`group`. Edits to `source` only propagate on the next apply. Use this when the bytes need to live on the target independently of the operator's filesystem (system configs, deployed artifacts, dev/remote apply).
+- **`state: "linked"`** — atomic symlink at `path` pointing to `source`. Refuses `mode`/`user`/`group` at the parser level (Linux symlinks have no meaningful mode of their own, and chmod/chown via the link silently mutates the target file in the operator's repo — declined). Edits to `source` show up at `path` immediately. Use this for dotfiles-style ergonomics.
+
+Both states validate at plan-load time (post-`plan()`, pre-resources expansion) that `source` exists and has the expected type — regular file for `@core/file`, directory for `@core/directory`. See `ResourceParams::validate_host_paths` in `resource/src/lib.rs`.
+
+Implementation notes:
+- The Linked state probe is *lexical*: `readlink(2)` against the source string. We deliberately don't canonicalise; otherwise drift between a plan declaring `./foo` and an existing link declaring something else is invisible.
+- The Sourced directory state probe is intentionally weak (`path` exists as a directory ⇒ `Sourced`). Content drift in `source` after first apply is not detected; declare `state: "absent"` and re-apply to force a refresh. A content-aware recursive diff is a future direction (cf. Salt's `file.recurse`).
+
 ### Causality IDs must be unique
 `compute_epochs` fails on duplicate IDs across leaves/branches. Any new code generating ids should avoid collisions (or scope them like `map_plan_subitems()` does by minting a `scope_id`).
 

@@ -212,6 +212,13 @@ pub enum FsError {
         source: std::io::Error,
     },
 
+    #[error("Cannot read symlink '{path}': {source}")]
+    ReadSymlink {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("Failed to set file times: {source}")]
     SetFileTimes {
         #[source]
@@ -235,6 +242,16 @@ pub async fn create_dir<P: AsRef<Path>>(path: P) -> Result<(), FsError> {
 /// macOS uses `-R` instead, and Windows has no `cp` at all. If we ever care about
 /// non-Linux targets, swap to a Rust-native walker (e.g. the `walkdir` + manual copy
 /// pattern, or the `fs_extra` crate).
+///
+/// Note(cc): callers must ensure `to` does not exist. GNU `cp -r src dst` when
+/// `dst` already exists creates `dst/<basename of src>` (a nested copy) instead
+/// of replacing `dst`'s contents. The current sole caller —
+/// `DirectoryOperation::CopyTree` from `@core/directory state: "sourced"` in
+/// guest mode — short-circuits via the directory-resource state probe (which
+/// reports `Sourced` weakly when `path` exists), so this footgun is masked in
+/// the happy path. A future caller that bypasses that probe will need to
+/// rmdir `to` first or this helper should grow a "remove destination first"
+/// option.
 pub async fn copy_dir<F: AsRef<Path>, T: AsRef<Path>>(from: F, to: T) -> Result<(), FsError> {
     let from_path = from.as_ref();
     let to_path = to.as_ref();
@@ -633,17 +650,91 @@ pub async fn remove_file<P: AsRef<Path>>(path: P) -> Result<(), FsError> {
         })
 }
 
-pub async fn create_symlink<F: AsRef<Path>, T: AsRef<Path>>(from: F, to: T) -> Result<(), FsError> {
+/// Atomically create (or replace) a symlink at `to` pointing to `from`.
+///
+/// Strategy: create the symlink at a sibling temp path, then `rename(2)` it
+/// over the destination. POSIX `rename` is path-level and atomic across
+/// regular files and symlinks, so any concurrent reader of `to` sees either
+/// the old entry or the new one — never an absent or half-created link.
+///
+/// Replaces an existing regular file or symlink at `to`. Fails (with
+/// `ENOTEMPTY`/`EISDIR`) if `to` is a non-empty directory — convert via an
+/// explicit `state: "absent"` first.
+///
+/// Note(cc): `from` is not stat-checked here. `lusid-resource`'s
+/// `validate_host_paths` checks the source up front, but the source can
+/// disappear in the gap between validation and apply, in which case this
+/// silently produces a dangling symlink. If dangling-link confusion ever
+/// surfaces in practice, add an `lstat(from)` here and surface a dedicated
+/// `FsError::SymlinkSourceMissing`.
+pub async fn create_symlink_atomic<F: AsRef<Path>, T: AsRef<Path>>(
+    from: F,
+    to: T,
+) -> Result<(), FsError> {
     let from_path = from.as_ref();
     let to_path = to.as_ref();
 
-    fs::symlink(from_path, to_path)
+    let temp_path = temporary_path_for(to_path);
+
+    fs::symlink(from_path, &temp_path)
         .await
         .map_err(|source| FsError::CreateSymlink {
             from: from_path.to_path_buf(),
-            to: to_path.to_path_buf(),
+            to: temp_path.clone(),
             source,
-        })
+        })?;
+
+    rename_file(&temp_path, to_path).await?;
+
+    Ok(())
+}
+
+/// Atomically probe `path`: returns the symlink target if `path` is a
+/// symlink, [`SymlinkTarget::NotASymlink`] if it exists but is something else
+/// (regular file, directory, …), or [`SymlinkTarget::Missing`] if it doesn't
+/// exist at all.
+///
+/// Combines `lstat` + `readlink` so a TOCTOU swap between the two only
+/// widens the window for a stale answer — never produces a confusing
+/// "Cannot read symlink" error for something that lstat'd as a symlink and
+/// then got replaced before the readlink. We translate `EINVAL` from
+/// `readlink` (path is no longer a symlink) into `NotASymlink` for that
+/// reason.
+pub async fn probe_symlink<P: AsRef<Path>>(path: P) -> Result<SymlinkTarget, FsError> {
+    let p = path.as_ref();
+    let metadata = match fs::symlink_metadata(p).await {
+        Ok(m) => m,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(SymlinkTarget::Missing);
+        }
+        Err(source) => {
+            return Err(FsError::Metadata {
+                path: p.to_path_buf(),
+                source,
+            });
+        }
+    };
+    if !metadata.file_type().is_symlink() {
+        return Ok(SymlinkTarget::NotASymlink);
+    }
+    match fs::read_link(p).await {
+        Ok(target) => Ok(SymlinkTarget::Symlink(target)),
+        Err(err) if err.raw_os_error() == Some(nix::libc::EINVAL) => Ok(SymlinkTarget::NotASymlink),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(SymlinkTarget::Missing),
+        Err(source) => Err(FsError::ReadSymlink {
+            path: p.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+/// Outcome of [`probe_symlink`]. Lexical — `Symlink(target)` is whatever
+/// `readlink(2)` returned, not a canonicalised path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymlinkTarget {
+    Symlink(PathBuf),
+    NotASymlink,
+    Missing,
 }
 
 // Sibling temp path: `<path>.<nanos>.tmp`. Nanosecond resolution is effectively
@@ -656,4 +747,135 @@ fn temporary_path_for(path: &Path) -> PathBuf {
         .as_nanos();
 
     path.with_extension(format!("{time}.tmp"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn create_symlink_atomic_creates_when_destination_is_missing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.txt");
+        write_file(&source, b"hello").await.unwrap();
+        let link = dir.path().join("link.txt");
+
+        create_symlink_atomic(&source, &link).await.unwrap();
+
+        assert_eq!(
+            probe_symlink(&link).await.unwrap(),
+            SymlinkTarget::Symlink(source)
+        );
+    }
+
+    #[tokio::test]
+    async fn create_symlink_atomic_replaces_an_existing_regular_file() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.txt");
+        write_file(&source, b"new bytes").await.unwrap();
+        let link = dir.path().join("link.txt");
+        write_file(&link, b"stale bytes").await.unwrap();
+
+        create_symlink_atomic(&source, &link).await.unwrap();
+
+        assert_eq!(
+            probe_symlink(&link).await.unwrap(),
+            SymlinkTarget::Symlink(source)
+        );
+    }
+
+    #[tokio::test]
+    async fn create_symlink_atomic_replaces_a_stale_symlink() {
+        let dir = tempdir().unwrap();
+        let old_target = dir.path().join("old.txt");
+        let new_target = dir.path().join("new.txt");
+        write_file(&old_target, b"old").await.unwrap();
+        write_file(&new_target, b"new").await.unwrap();
+        let link = dir.path().join("link.txt");
+
+        create_symlink_atomic(&old_target, &link).await.unwrap();
+        assert_eq!(
+            probe_symlink(&link).await.unwrap(),
+            SymlinkTarget::Symlink(old_target)
+        );
+
+        create_symlink_atomic(&new_target, &link).await.unwrap();
+        assert_eq!(
+            probe_symlink(&link).await.unwrap(),
+            SymlinkTarget::Symlink(new_target)
+        );
+    }
+
+    #[tokio::test]
+    async fn create_symlink_atomic_fails_when_destination_is_a_non_empty_dir() {
+        // Non-empty directory at `to` makes `rename(2)` fail with
+        // ENOTEMPTY/EISDIR. We surface that as `RenameFile` so the user sees
+        // the offending paths and can recover via `state: "absent"`.
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.txt");
+        write_file(&source, b"x").await.unwrap();
+        let link = dir.path().join("link");
+        create_dir(&link).await.unwrap();
+        write_file(&link.join("inner.txt"), b"keep me")
+            .await
+            .unwrap();
+
+        let err = create_symlink_atomic(&source, &link).await.unwrap_err();
+        assert!(matches!(err, FsError::RenameFile { .. }));
+    }
+
+    #[tokio::test]
+    async fn create_symlink_atomic_fails_when_destination_is_an_empty_dir() {
+        // Linux's `rename(2)` rejects renaming a non-directory over a
+        // directory (even an empty one) with EISDIR. Pinning this so a
+        // future "auto-rmdir if empty" change is intentional.
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("source.txt");
+        write_file(&source, b"x").await.unwrap();
+        let link = dir.path().join("empty-dir");
+        create_dir(&link).await.unwrap();
+
+        let err = create_symlink_atomic(&source, &link).await.unwrap_err();
+        assert!(matches!(err, FsError::RenameFile { .. }));
+    }
+
+    #[tokio::test]
+    async fn probe_symlink_classifies_files_links_and_missing() {
+        let dir = tempdir().unwrap();
+        let regular = dir.path().join("regular.txt");
+        write_file(&regular, b"hi").await.unwrap();
+        let link = dir.path().join("link.txt");
+        create_symlink_atomic(&regular, &link).await.unwrap();
+        let missing = dir.path().join("missing.txt");
+
+        assert_eq!(
+            probe_symlink(&regular).await.unwrap(),
+            SymlinkTarget::NotASymlink
+        );
+        assert_eq!(
+            probe_symlink(&link).await.unwrap(),
+            SymlinkTarget::Symlink(regular)
+        );
+        assert_eq!(
+            probe_symlink(&missing).await.unwrap(),
+            SymlinkTarget::Missing
+        );
+    }
+
+    #[tokio::test]
+    async fn probe_symlink_handles_dangling_symlink() {
+        // `lstat` returns the symlink itself, regardless of whether the
+        // target exists. The probe should report `Symlink(target)`, not
+        // `Missing`, so callers can decide what dangling means for them.
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("does-not-exist.txt");
+        let link = dir.path().join("dangling.txt");
+        create_symlink_atomic(&target, &link).await.unwrap();
+
+        assert_eq!(
+            probe_symlink(&link).await.unwrap(),
+            SymlinkTarget::Symlink(target)
+        );
+    }
 }

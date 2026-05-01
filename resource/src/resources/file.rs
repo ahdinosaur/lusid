@@ -10,7 +10,7 @@ use lusid_operation::{
 };
 use lusid_params::{ParseError, ParseParams, StructFields};
 use lusid_view::impl_display_render;
-use rimu::{Spanned, Value};
+use rimu::{Span, Spanned, Value};
 use secrecy::ExposeSecret;
 use thiserror::Error;
 
@@ -18,13 +18,45 @@ use crate::ResourceType;
 
 #[derive(Debug, Clone)]
 pub enum FileParams {
+    /// Byte-copy from `source` (a host-path) into `path` (a target-path),
+    /// atomically. Edits to `source` only propagate on the next apply. Use
+    /// this for files whose contents are an artifact of the plan and whose
+    /// bytes must live on the target — including dev/remote apply, where the
+    /// operator's filesystem isn't reachable.
     Sourced {
         source: FilePath,
+        /// Span of the `source` value in the plan source. Carried so
+        /// host-path validation errors can point at the offending line.
+        source_span: Span,
         path: FilePath,
         mode: Option<FileMode>,
         user: Option<FileUser>,
         group: Option<FileGroup>,
     },
+
+    /// Materialise `path` as a symlink to `source` (a host-path on the
+    /// machine running apply). Edits to `source` propagate immediately —
+    /// nothing to re-apply — which is the dotfiles ergonomic. Symlinks have
+    /// no meaningful `mode`/`user`/`group` of their own on Linux (chmod
+    /// follows the link, lchmod doesn't exist), and we don't want
+    /// chmod/chown silently mutating the operator's source file via the
+    /// link, so the parser refuses those fields here.
+    ///
+    /// Note(cc): `source` arrives here as an *absolute* host-path — the
+    /// `host-path` param-type coercion resolves relative strings against
+    /// the plan's source dir before this point. The created symlink target
+    /// is therefore absolute, so moving the source repo breaks every link.
+    /// GNU stow defaults to relative for that reason; if relative-target
+    /// becomes a use-case, add an opt-in `relative: true` field here and
+    /// thread it through `FileChange::CreateSymlink` to the operation.
+    Linked {
+        source: FilePath,
+        /// Span of the `source` value in the plan source. See
+        /// [`FileParams::Sourced::source_span`] for rationale.
+        source_span: Span,
+        path: FilePath,
+    },
+
     Present {
         path: FilePath,
         mode: Option<FileMode>,
@@ -39,25 +71,38 @@ pub enum FileParams {
 impl ParseParams for FileParams {
     fn parse_params(value: Spanned<Value>) -> Result<Self, Spanned<ParseError>> {
         let mut fields = StructFields::new(value)?;
-        let state = fields.take_discriminator("state", &["sourced", "present", "absent"])?;
+        let state =
+            fields.take_discriminator("state", &["sourced", "linked", "present", "absent"])?;
         let out = match state {
-            "sourced" => FileParams::Sourced {
+            "sourced" => {
                 // `source` is a `host-path`; the parser resolves a relative
                 // string against the plan's source dir (or accepts a typed
                 // `Value::HostPath` from a plan that uses `host_path("./...")`).
                 // Either way we lower to a `FilePath` string for the operation
-                // layer.
-                source: FilePath::new(
-                    fields
-                        .required_host_path("source")?
-                        .to_string_lossy()
-                        .into_owned(),
-                ),
-                path: FilePath::new(fields.required_target_path("path")?),
-                mode: fields.optional_u32("mode")?.map(FileMode::new),
-                user: fields.optional_string("user")?.map(FileUser::new),
-                group: fields.optional_string("group")?.map(FileGroup::new),
-            },
+                // layer; the original span is kept for downstream diagnostics.
+                let (source_path, source_span) =
+                    fields.required_host_path_spanned("source")?.take();
+                FileParams::Sourced {
+                    source: FilePath::new(source_path.to_string_lossy().into_owned()),
+                    source_span,
+                    path: FilePath::new(fields.required_target_path("path")?),
+                    mode: fields.optional_u32("mode")?.map(FileMode::new),
+                    user: fields.optional_string("user")?.map(FileUser::new),
+                    group: fields.optional_string("group")?.map(FileGroup::new),
+                }
+            }
+            "linked" => {
+                // No `mode`/`user`/`group` here — see the variant docs. Any
+                // such field will be left in `fields` and rejected by
+                // `fields.finish()` below as an unknown key.
+                let (source_path, source_span) =
+                    fields.required_host_path_spanned("source")?.take();
+                FileParams::Linked {
+                    source: FilePath::new(source_path.to_string_lossy().into_owned()),
+                    source_span,
+                    path: FilePath::new(fields.required_target_path("path")?),
+                }
+            }
             "present" => FileParams::Present {
                 path: FilePath::new(fields.required_target_path("path")?),
                 mode: fields.optional_u32("mode")?.map(FileMode::new),
@@ -80,6 +125,9 @@ impl Display for FileParams {
             FileParams::Sourced { source, path, .. } => {
                 write!(f, "File::Sourced(source = {source}, path = {path})")
             }
+            FileParams::Linked { source, path, .. } => {
+                write!(f, "File::Linked(source = {source}, path = {path})")
+            }
             FileParams::Present { path, .. } => write!(f, "File::Present(path = {path})"),
             FileParams::Absent { path } => write!(f, "File::Absent(path = {path})"),
         }
@@ -91,6 +139,10 @@ impl_display_render!(FileParams);
 #[derive(Debug, Clone)]
 pub enum FileResource {
     Sourced {
+        source: FilePath,
+        path: FilePath,
+    },
+    Linked {
         source: FilePath,
         path: FilePath,
     },
@@ -127,6 +179,9 @@ impl Display for FileResource {
             FileResource::Sourced { source, path } => {
                 write!(f, "FileSourced({source} -> {path})")
             }
+            FileResource::Linked { source, path } => {
+                write!(f, "FileLinked({source} -> {path})")
+            }
             FileResource::Secret { name, path } => {
                 write!(f, "FileSecret(secret = {name} -> {path})")
             }
@@ -145,6 +200,8 @@ impl_display_render!(FileResource);
 pub enum FileState {
     Sourced,
     NotSourced,
+    Linked,
+    NotLinked,
     Present,
     Absent,
     ModeCorrect,
@@ -161,6 +218,8 @@ impl Display for FileState {
         let text = match self {
             Sourced => "Sourced",
             NotSourced => "NotSourced",
+            Linked => "Linked",
+            NotLinked => "NotLinked",
             Present => "Present",
             Absent => "Absent",
             ModeCorrect => "ModeCorrect",
@@ -196,6 +255,10 @@ pub enum FileChange {
         path: FilePath,
         source: FileSource,
     },
+    CreateSymlink {
+        source: FilePath,
+        path: FilePath,
+    },
     Remove {
         path: FilePath,
     },
@@ -229,6 +292,9 @@ impl Display for FileChange {
                     write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
                 }
             },
+            FileChange::CreateSymlink { source, path } => {
+                write!(f, "File::CreateSymlink(source = {source}, path = {path})")
+            }
             FileChange::Remove { path } => write!(f, "File::Remove(path = {path})"),
             FileChange::ChangeMode { path, mode } => {
                 write!(f, "File::ChangeMode(path = {path}, mode = {mode})")
@@ -254,9 +320,49 @@ impl ResourceType for File {
     type Resource = FileResource;
 
     fn resources(params: Self::Params) -> Vec<CausalityTree<Self::Resource>> {
+        // Mode/User/Group sub-atoms are common to `Sourced` and `Present`
+        // (Linked rejects them at parse time, so it never reaches here).
+        fn permission_atoms(
+            path: &FilePath,
+            mode: Option<FileMode>,
+            user: Option<FileUser>,
+            group: Option<FileGroup>,
+        ) -> Vec<CausalityTree<FileResource>> {
+            let mut nodes = Vec::new();
+            if let Some(mode) = mode {
+                nodes.push(CausalityTree::leaf(
+                    CausalityMeta::requires(vec!["file".into()]),
+                    FileResource::Mode {
+                        path: path.clone(),
+                        mode,
+                    },
+                ));
+            }
+            if let Some(user) = user {
+                nodes.push(CausalityTree::leaf(
+                    CausalityMeta::requires(vec!["file".into()]),
+                    FileResource::User {
+                        path: path.clone(),
+                        user,
+                    },
+                ));
+            }
+            if let Some(group) = group {
+                nodes.push(CausalityTree::leaf(
+                    CausalityMeta::requires(vec!["file".into()]),
+                    FileResource::Group {
+                        path: path.clone(),
+                        group,
+                    },
+                ));
+            }
+            nodes
+        }
+
         match params {
             FileParams::Sourced {
                 source,
+                source_span: _,
                 path,
                 mode,
                 user,
@@ -269,36 +375,18 @@ impl ResourceType for File {
                         path: path.clone(),
                     },
                 )];
-
-                if let Some(mode) = mode {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::Mode {
-                            path: path.clone(),
-                            mode,
-                        },
-                    ));
-                }
-
-                if let Some(user) = user {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::User {
-                            path: path.clone(),
-                            user,
-                        },
-                    ))
-                }
-
-                if let Some(group) = group {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::Group { path, group },
-                    ));
-                }
-
+                nodes.extend(permission_atoms(&path, mode, user, group));
                 nodes
             }
+
+            FileParams::Linked {
+                source,
+                source_span: _,
+                path,
+            } => vec![CausalityTree::leaf(
+                CausalityMeta::default(),
+                FileResource::Linked { source, path },
+            )],
 
             FileParams::Present {
                 path,
@@ -310,34 +398,7 @@ impl ResourceType for File {
                     CausalityMeta::id("file".into()),
                     FileResource::Present { path: path.clone() },
                 )];
-
-                if let Some(mode) = mode {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::Mode {
-                            path: path.clone(),
-                            mode,
-                        },
-                    ));
-                }
-
-                if let Some(user) = user {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::User {
-                            path: path.clone(),
-                            user,
-                        },
-                    ));
-                }
-
-                if let Some(group) = group {
-                    nodes.push(CausalityTree::leaf(
-                        CausalityMeta::requires(vec!["file".into()]),
-                        FileResource::Group { path, group },
-                    ));
-                }
-
+                nodes.extend(permission_atoms(&path, mode, user, group));
                 nodes
             }
 
@@ -369,6 +430,8 @@ impl ResourceType for File {
                     }
                 }
             }
+
+            FileResource::Linked { source, path } => probe_linked_state(source, path).await?,
 
             FileResource::Secret { name, path } => {
                 if !fs::path_exists(path.as_path()).await? {
@@ -458,6 +521,15 @@ impl ResourceType for File {
 
             (FileResource::Sourced { .. }, FileState::Sourced) => None,
 
+            (FileResource::Linked { source, path }, FileState::NotLinked) => {
+                Some(FileChange::CreateSymlink {
+                    source: source.clone(),
+                    path: path.clone(),
+                })
+            }
+
+            (FileResource::Linked { .. }, FileState::Linked) => None,
+
             (FileResource::Secret { name, path }, FileState::NotSourced) => {
                 Some(FileChange::Write {
                     path: path.clone(),
@@ -523,6 +595,9 @@ impl ResourceType for File {
             FileChange::Write { path, source } => {
                 Operation::File(FileOperation::Write { path, source })
             }
+            FileChange::CreateSymlink { source, path } => {
+                Operation::File(FileOperation::CreateSymlink { source, path })
+            }
             FileChange::Remove { path } => Operation::File(FileOperation::Remove { path }),
             FileChange::ChangeMode { path, mode } => {
                 Operation::File(FileOperation::ChangeMode { path, mode })
@@ -533,5 +608,185 @@ impl ResourceType for File {
         };
 
         vec![CausalityTree::leaf(CausalityMeta::default(), op)]
+    }
+}
+
+/// Probe `path` for whether it's a symlink with the desired `source` target.
+///
+/// Comparison is *lexical*: `target` is whatever `readlink(2)` returned,
+/// compared as a `PathBuf` against the source path string. We deliberately
+/// don't canonicalise — `source` arrives as the absolute resolved host-path
+/// (see `params::ParamType::HostPath` coercion), and any pre-existing symlink
+/// that `readlink`s to a different string — even one that resolves to the
+/// same inode — should re-create. Otherwise the operator can never see drift
+/// between a plan declaring `./foo` and an existing link with a different
+/// declaration.
+async fn probe_linked_state(
+    source: &FilePath,
+    path: &FilePath,
+) -> Result<FileState, FileStateError> {
+    match fs::probe_symlink(path.as_path()).await? {
+        fs::SymlinkTarget::Symlink(target) if target == source.as_path() => Ok(FileState::Linked),
+        // Wrong-target symlink, regular file, or missing path — all mean
+        // "(re)create the symlink".
+        _ => Ok(FileState::NotLinked),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn file_path(p: &std::path::Path) -> FilePath {
+        FilePath::new(p.to_string_lossy().into_owned())
+    }
+
+    // --- Sourced state probe (byte-equality) ----------------------------
+
+    #[tokio::test]
+    async fn sourced_byte_equal_reports_sourced() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        let target = dir.path().join("dest.txt");
+        tokio::fs::write(&source, b"hello").await.unwrap();
+        tokio::fs::write(&target, b"hello").await.unwrap();
+
+        let resource = FileResource::Sourced {
+            source: file_path(&source),
+            path: file_path(&target),
+        };
+        let mut ctx = lusid_ctx::Context::create(dir.path()).unwrap();
+        let state = File::state(&mut ctx, &resource).await.unwrap();
+        assert!(matches!(state, FileState::Sourced));
+    }
+
+    #[tokio::test]
+    async fn sourced_byte_diff_reports_not_sourced() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        let target = dir.path().join("dest.txt");
+        tokio::fs::write(&source, b"new").await.unwrap();
+        tokio::fs::write(&target, b"old").await.unwrap();
+
+        let resource = FileResource::Sourced {
+            source: file_path(&source),
+            path: file_path(&target),
+        };
+        let mut ctx = lusid_ctx::Context::create(dir.path()).unwrap();
+        let state = File::state(&mut ctx, &resource).await.unwrap();
+        assert!(matches!(state, FileState::NotSourced));
+    }
+
+    #[tokio::test]
+    async fn sourced_missing_path_reports_not_sourced() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let target = dir.path().join("dest.txt");
+
+        let resource = FileResource::Sourced {
+            source: file_path(&source),
+            path: file_path(&target),
+        };
+        let mut ctx = lusid_ctx::Context::create(dir.path()).unwrap();
+        let state = File::state(&mut ctx, &resource).await.unwrap();
+        assert!(matches!(state, FileState::NotSourced));
+    }
+
+    // --- Linked state probe (lexical-symlink-target) --------------------
+
+    #[tokio::test]
+    async fn linked_correct_symlink_reports_linked() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let target = dir.path().join("link.txt");
+        tokio::fs::symlink(&source, &target).await.unwrap();
+
+        let state = probe_linked_state(&file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::Linked));
+    }
+
+    #[tokio::test]
+    async fn linked_regular_file_reports_not_linked() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"shared").await.unwrap();
+        let target = dir.path().join("regular.txt");
+        tokio::fs::write(&target, b"shared").await.unwrap();
+
+        let state = probe_linked_state(&file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotLinked));
+    }
+
+    #[tokio::test]
+    async fn linked_wrong_symlink_target_reports_not_linked() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        let other = dir.path().join("other.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        tokio::fs::write(&other, b"y").await.unwrap();
+        let target = dir.path().join("link.txt");
+        tokio::fs::symlink(&other, &target).await.unwrap();
+
+        let state = probe_linked_state(&file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotLinked));
+    }
+
+    #[tokio::test]
+    async fn linked_missing_path_reports_not_linked() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("src.txt");
+        tokio::fs::write(&source, b"x").await.unwrap();
+        let target = dir.path().join("link.txt");
+
+        let state = probe_linked_state(&file_path(&source), &file_path(&target))
+            .await
+            .unwrap();
+        assert!(matches!(state, FileState::NotLinked));
+    }
+
+    // --- Change-emission table -----------------------------------------
+
+    #[test]
+    fn change_for_sourced_not_sourced_writes_path_source() {
+        let resource = FileResource::Sourced {
+            source: FilePath::new("/host/src.txt"),
+            path: FilePath::new("/target/dest.txt"),
+        };
+        let change = File::change(&resource, &FileState::NotSourced).expect("some change");
+        match change {
+            FileChange::Write {
+                path,
+                source: FileSource::Path(s),
+            } => {
+                assert_eq!(path.as_path(), std::path::Path::new("/target/dest.txt"));
+                assert_eq!(s.as_path(), std::path::Path::new("/host/src.txt"));
+            }
+            other => panic!("expected Write{{Path}}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn change_for_linked_not_linked_emits_create_symlink() {
+        let resource = FileResource::Linked {
+            source: FilePath::new("/host/src.txt"),
+            path: FilePath::new("/target/dest.txt"),
+        };
+        let change = File::change(&resource, &FileState::NotLinked).expect("some change");
+        match change {
+            FileChange::CreateSymlink { source, path } => {
+                assert_eq!(source.as_path(), std::path::Path::new("/host/src.txt"));
+                assert_eq!(path.as_path(), std::path::Path::new("/target/dest.txt"));
+            }
+            other => panic!("expected CreateSymlink, got {other:?}"),
+        }
     }
 }

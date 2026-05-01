@@ -34,7 +34,10 @@ pub enum FileApplyError {
 #[derive(Debug, Clone)]
 pub enum FileSource {
     Contents(Vec<u8>),
+
+    /// Copy the file at this host path into `path` atomically.
     Path(FilePath),
+
     /// Reference to a decrypted secret by name; resolved against
     /// [`Context::secrets`] at apply time so plaintext never lives in the
     /// resource/change/operation tree.
@@ -123,19 +126,13 @@ pub enum FileOperation {
         path: FilePath,
         source: FileSource,
     },
-    Copy {
-        source: FilePath,
-        destination: FilePath,
-    },
-    Move {
-        source: FilePath,
-        destination: FilePath,
-    },
-    Remove {
-        path: FilePath,
-    },
+    /// Atomically create (or replace) a symlink at `path` targeting `source`.
+    /// Emitted by `@core/file state: "linked"`.
     CreateSymlink {
         source: FilePath,
+        path: FilePath,
+    },
+    Remove {
         path: FilePath,
     },
     ChangeMode {
@@ -168,28 +165,12 @@ impl Display for FileOperation {
                     write!(f, "File::Write(path = {}, source = Secret({}))", path, name)
                 }
             },
-            FileOperation::Copy {
-                source,
-                destination,
-            } => write!(
-                f,
-                "File::Copy(source = {}, destination = {})",
-                source, destination
-            ),
-            FileOperation::Move {
-                source,
-                destination,
-            } => write!(
-                f,
-                "File::Move(source = {}, destination = {})",
-                source, destination
-            ),
-            FileOperation::Remove { path } => write!(f, "File::Remove(path = {})", path),
             FileOperation::CreateSymlink { source, path } => write!(
                 f,
                 "File::CreateSymlink(source = {}, path = {})",
                 source, path
             ),
+            FileOperation::Remove { path } => write!(f, "File::Remove(path = {})", path),
             FileOperation::ChangeMode { path, mode } => {
                 write!(f, "File::ChangeMode(path = {}, mode = {})", path, mode)
             }
@@ -206,9 +187,13 @@ impl Display for FileOperation {
 
 impl_display_render!(FileOperation);
 
-/// Apply-time resolution of a [`FileSource`] for a write: `Bytes` covers
-/// both inline contents and decrypted-secret plaintext; `Copy` covers a
-/// path-sourced copy.
+/// Apply-time resolution of a [`FileSource`] for a write:
+///
+/// - `Bytes` covers both inline contents and decrypted-secret plaintext.
+/// - `Copy` covers a path-sourced copy.
+///
+/// Resolved up-front so the inner async block doesn't borrow `ctx` (and so
+/// secret plaintext lives only as long as the `Vec<u8>` it's copied into).
 enum WriteSource {
     Bytes(Vec<u8>),
     Copy(FilePath),
@@ -240,16 +225,17 @@ impl OperationType for File {
 
         match operation.clone() {
             FileOperation::Write { path, source } => {
-                info!("[file] write file: {}", path);
-                // Resolve up-front so the inner async block doesn't borrow
-                // ctx. For `Secret`, plaintext is copied out of the
-                // `SecretBox` envelope into a plain `Vec<u8>` that lives
-                // only for the duration of the write and is dropped
-                // immediately after.
                 let resolved: WriteSource = match source {
-                    FileSource::Contents(bytes) => WriteSource::Bytes(bytes),
-                    FileSource::Path(source) => WriteSource::Copy(source),
+                    FileSource::Contents(bytes) => {
+                        info!("[file] write contents: {} ({} bytes)", path, bytes.len());
+                        WriteSource::Bytes(bytes)
+                    }
+                    FileSource::Path(source) => {
+                        info!("[file] copy file: {} -> {}", source, path);
+                        WriteSource::Copy(source)
+                    }
                     FileSource::Secret(name) => {
+                        info!("[file] write secret: {} -> {}", name, path);
                         let secret = ctx
                             .secrets()
                             .get(&name)
@@ -273,28 +259,11 @@ impl OperationType for File {
                     stderr,
                 ))
             }
-            FileOperation::Copy {
-                source,
-                destination,
-            } => {
-                info!("[file] copy file: {} -> {}", source, destination);
+            FileOperation::CreateSymlink { source, path } => {
+                info!("[file] create symlink: {} -> {}", path, source);
                 Ok((
                     Box::pin(async move {
-                        fs::copy_file_atomic(source.as_path(), destination.as_path()).await?;
-                        Ok(())
-                    }),
-                    stdout,
-                    stderr,
-                ))
-            }
-            FileOperation::Move {
-                source,
-                destination,
-            } => {
-                info!("[file] move file: {} -> {}", source, destination);
-                Ok((
-                    Box::pin(async move {
-                        fs::rename_file(source.as_path(), destination.as_path()).await?;
+                        fs::create_symlink_atomic(source.as_path(), path.as_path()).await?;
                         Ok(())
                     }),
                     stdout,
@@ -306,17 +275,6 @@ impl OperationType for File {
                 Ok((
                     Box::pin(async move {
                         fs::remove_file(path.as_path()).await?;
-                        Ok(())
-                    }),
-                    stdout,
-                    stderr,
-                ))
-            }
-            FileOperation::CreateSymlink { source, path } => {
-                info!("[file] create symlink: {} -> {}", path, source);
-                Ok((
-                    Box::pin(async move {
-                        fs::create_symlink(source.as_path(), path.as_path()).await?;
                         Ok(())
                     }),
                     stdout,
